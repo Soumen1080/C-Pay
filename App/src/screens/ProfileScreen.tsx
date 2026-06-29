@@ -4,18 +4,13 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  ScrollView,
-  Platform,
   Switch,
   Image,
-  Share,
-  Linking,
-  Modal,
+  Platform,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
-import { File } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import QRCode from 'react-native-qrcode-svg';
@@ -24,27 +19,17 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { isMerchant, getMerchantProfile, merchantEvents } from '../services/merchant';
 import { supabase } from '../services/supabase';
-import { isBiometricAvailable, getBiometricType, enableBiometric, getAuthenticatedWallet } from '../utils/biometric';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/theme';
 import { Screen, Section, ActionRow } from '../components';
 import { AlertManager } from '../utils/alert';
 import { formatWalletFingerprint, getCurrentUserCPayId } from '../utils/cpayId';
 import { getMediaLibraryDownloadErrorMessage, requestPhotoSavePermission } from '../utils/mediaLibrary';
-import { clearBiometricBackup, clearSessionPin, hasBiometricBackup } from '../services/wallet';
-import { getExplorerUrl } from '../services/blockchain';
+import { clearSessionPin } from '../services/wallet';
 import { generatePaymentQR } from '../utils/qrCode';
 
 interface ProfileScreenProps {
   navigation: any;
 }
-
-type ExportedKey = {
-  title: string;
-  description: string;
-  value: string;
-  valueLabel: string;
-  warning: string;
-};
 
 export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
   const [walletAddress, setWalletAddress] = useState<string>('');
@@ -52,17 +37,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
   const [displayName, setDisplayName] = useState<string>('');
   const [merchantStatus, setMerchantStatus] = useState<boolean>(false);
   const [businessName, setBusinessName] = useState<string>('');
-  const [biometricEnabled, setBiometricEnabled] = useState<boolean>(false);
-  const [biometricAvailable, setBiometricAvailable] = useState<boolean>(false);
-  const [biometricSaving, setBiometricSaving] = useState<boolean>(false);
-  const [biometricType, setBiometricType] = useState<string>('Biometric');
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(true);
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [showQRCode, setShowQRCode] = useState<boolean>(false);
-  const [exportedKey, setExportedKey] = useState<ExportedKey | null>(null);
-  const [showExportedKey, setShowExportedKey] = useState(false);
   const qrCodeRef = useRef<any>(null);
-  const biometricSavingRef = useRef(false);
 
   useEffect(() => {
     loadWalletAddress();
@@ -71,27 +49,16 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
     checkMerchantStatus();
     loadSettings();
     loadProfilePhoto();
-    
-    // Listen for merchant registration events (real-time updates)
-    const merchantListener = () => {
-      console.log('📡 Received merchantRegistered event, refreshing status...');
-      checkMerchantStatus();
-    };
-    
+
+    const merchantListener = () => checkMerchantStatus();
     merchantEvents.on('merchantRegistered', merchantListener);
-    console.log('🎯 Subscribed to merchantRegistered events');
-    
-    // Cleanup on unmount
     return () => {
       merchantEvents.off('merchantRegistered', merchantListener);
-      console.log('🚫 Unsubscribed from merchantRegistered events');
     };
   }, []);
 
-  // Refresh all profile data when screen comes into focus
   useFocusEffect(
     React.useCallback(() => {
-      console.log('🔄 ProfileScreen focused - refreshing all data');
       loadCPayId();
       loadDisplayName();
       checkMerchantStatus();
@@ -102,16 +69,12 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
 
   const loadWalletAddress = async () => {
     const address = await AsyncStorage.getItem('wallet_address');
-    if (address) {
-      setWalletAddress(address);
-    }
+    if (address) setWalletAddress(address);
   };
 
   const loadCPayId = async () => {
     const id = await getCurrentUserCPayId();
-    if (id) {
-      setCpayId(id);
-    }
+    if (id) setCpayId(id);
   };
 
   const loadDisplayName = async () => {
@@ -119,7 +82,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
       const address = await AsyncStorage.getItem('wallet_address');
       if (!address) return;
 
-      // Fetch display name from database first
       const { data, error } = await supabase
         .from('users')
         .select('display_name')
@@ -128,69 +90,20 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
 
       if (!error && data?.display_name) {
         setDisplayName(data.display_name);
-        // Save to AsyncStorage for offline access
         await AsyncStorage.setItem('display_name', data.display_name);
       } else {
-        // Fallback to local storage
         const localName = await AsyncStorage.getItem('display_name');
-        if (localName) {
-          setDisplayName(localName);
-        }
+        if (localName) setDisplayName(localName);
       }
     } catch (error) {
       console.error('Error loading display name:', error);
-      // Fallback to AsyncStorage
       const localName = await AsyncStorage.getItem('display_name');
-      if (localName) {
-        setDisplayName(localName);
-      }
+      if (localName) setDisplayName(localName);
     }
-  };
-
-  const syncBiometricPreference = (enabled: boolean) => {
-    void (async () => {
-      try {
-        const address = await AsyncStorage.getItem('wallet_address');
-        if (!address) {
-          return;
-        }
-
-        const { error } = await supabase
-          .from('users')
-          .update({ biometric_enabled: enabled })
-          .eq('wallet_address', address);
-
-        if (error) {
-          console.log('Failed to sync biometric preference:', error);
-        }
-      } catch (error) {
-        console.log('Failed to sync biometric preference:', error);
-      }
-    })();
   };
 
   const loadSettings = async () => {
-    const [biometricSetting, available, type, backupAvailable, notifSetting] = await Promise.all([
-      AsyncStorage.getItem('biometric_enabled'),
-      isBiometricAvailable(),
-      getBiometricType(),
-      hasBiometricBackup(),
-      AsyncStorage.getItem('notifications_enabled'),
-    ]);
-
-    setBiometricType(type);
-    setBiometricAvailable(available);
-
-    if (!biometricSavingRef.current) {
-      const biometricReady = biometricSetting === 'true' && available && backupAvailable;
-      setBiometricEnabled(biometricReady);
-
-      if (biometricSetting === 'true' && !biometricReady) {
-        await AsyncStorage.setItem('biometric_enabled', 'false');
-        syncBiometricPreference(false);
-      }
-    }
-
+    const notifSetting = await AsyncStorage.getItem('notifications_enabled');
     setNotificationsEnabled(notifSetting !== 'false');
   };
 
@@ -199,7 +112,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
       const address = await AsyncStorage.getItem('wallet_address');
       if (!address) return;
 
-      // Fetch profile photo URL from database
       const { data, error } = await supabase
         .from('users')
         .select('profile_photo_url')
@@ -209,11 +121,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
       if (!error && data?.profile_photo_url) {
         setProfilePhoto(data.profile_photo_url);
       } else {
-        // Fallback to local storage for backwards compatibility
         const localPhoto = await AsyncStorage.getItem('profile_photo');
-        if (localPhoto) {
-          setProfilePhoto(localPhoto);
-        }
+        if (localPhoto) setProfilePhoto(localPhoto);
       }
     } catch (error) {
       console.error('Error loading profile photo:', error);
@@ -227,9 +136,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
       setMerchantStatus(isMerch);
       if (isMerch) {
         const profile = await getMerchantProfile(address);
-        if (profile) {
-          setBusinessName(profile.business_name);
-        }
+        if (profile) setBusinessName(profile.business_name);
       }
     }
   };
@@ -237,7 +144,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
   const handlePickImage = async () => {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      
       if (status !== 'granted') {
         AlertManager.alert('Permission Required', 'Please allow access to your photos to change your profile picture.');
         return;
@@ -252,18 +158,12 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
 
       if (!result.canceled && result.assets[0]) {
         const photoUri = result.assets[0].uri;
-        
-        // Show uploading state
         AlertManager.alert('Uploading', 'Uploading your profile photo...');
-        
-        // Upload to Supabase Storage
         const uploaded = await uploadProfilePhoto(photoUri);
-        
         if (uploaded) {
           setProfilePhoto(uploaded);
-          AlertManager.alert('Success', 'Profile photo updated and synced to cloud!');
+          AlertManager.alert('Success', 'Profile photo updated and synced to cloud!', undefined, { type: 'success' });
         } else {
-          // Fallback to local storage if upload fails
           setProfilePhoto(photoUri);
           await AsyncStorage.setItem('profile_photo', photoUri);
           AlertManager.alert('Saved Locally', 'Photo saved on device. Cloud sync unavailable.');
@@ -271,21 +171,15 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
       }
     } catch (error) {
       console.error('Error picking image:', error);
-      AlertManager.alert('Error', 'Failed to update profile photo');
+      AlertManager.alert('Error', 'Failed to update profile photo', undefined, { type: 'error' });
     }
   };
 
   const uploadProfilePhoto = async (photoUri: string): Promise<string | null> => {
     try {
       const address = await AsyncStorage.getItem('wallet_address');
-      if (!address) {
-        console.error('No wallet address found');
-        return null;
-      }
+      if (!address) return null;
 
-      console.log('Starting upload for:', photoUri);
-
-      // Read file as base64 for React Native compatibility
       const base64 = await fetch(photoUri)
         .then(res => res.blob())
         .then(blob => {
@@ -293,7 +187,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
             const reader = new FileReader();
             reader.onloadend = () => {
               const base64data = reader.result as string;
-              // Remove data:image/xxx;base64, prefix
               resolve(base64data.split(',')[1]);
             };
             reader.onerror = reject;
@@ -301,22 +194,17 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
           });
         });
 
-      // Create unique filename
       const fileExt = photoUri.split('.').pop()?.split('?')[0] || 'jpg';
       const fileName = `${address.substring(0, 8)}_${Date.now()}.${fileExt}`;
       const filePath = `profile-photos/${fileName}`;
 
-      console.log('Uploading to path:', filePath);
-
-      // Convert base64 to array buffer for upload
       const binaryString = atob(base64);
       const bytes = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i);
       }
 
-      // Upload to Supabase Storage
-      const { data: uploadData, error: uploadError } = await supabase.storage
+      const { error: uploadError } = await supabase.storage
         .from('profile-images')
         .upload(filePath, bytes.buffer, {
           contentType: `image/${fileExt}`,
@@ -325,42 +213,26 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
 
       if (uploadError) {
         console.error('Upload error details:', uploadError);
-        console.error('Error message:', uploadError.message);
-        console.error('Error name:', uploadError.name);
         return null;
       }
 
-      console.log('Upload successful:', uploadData);
-
-      // Get public URL
       const { data: urlData } = supabase.storage
         .from('profile-images')
         .getPublicUrl(filePath);
 
       const publicUrl = urlData.publicUrl;
-      console.log('Public URL:', publicUrl);
 
-      // Update database with photo URL
       const { error: dbError } = await supabase
         .from('users')
         .update({ profile_photo_url: publicUrl })
         .eq('wallet_address', address);
 
-      if (dbError) {
-        console.error('Database update error:', dbError);
-        // Still return URL even if DB update fails
-      }
+      if (dbError) console.error('Database update error:', dbError);
 
-      // Also save locally for offline access
       await AsyncStorage.setItem('profile_photo', publicUrl);
-
       return publicUrl;
     } catch (error) {
       console.error('Error uploading profile photo:', error);
-      if (error instanceof Error) {
-        console.error('Error message:', error.message);
-        console.error('Error stack:', error.stack);
-      }
       return null;
     }
   };
@@ -368,150 +240,51 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
   const handleCopyAddress = async () => {
     const idToCopy = cpayId || formatWalletFingerprint(walletAddress);
     await Clipboard.setStringAsync(idToCopy);
+    AlertManager.alert('Copied', 'Your C-Pay ID was copied to the clipboard.', undefined, { type: 'success' });
   };
 
-  const handleShareAddress = async () => {
-    try {
-      await Share.share({
-        message: `My C-Pay ID:\n${cpayId || formatWalletFingerprint(walletAddress)}`,
-      });
-    } catch (error) {
-      console.error('Error sharing:', error);
-    }
-  };
-
-  const handleViewOnExplorer = () => {
-    const explorerUrl = getExplorerUrl('account', walletAddress);
-    Linking.openURL(explorerUrl);
-  };
-
-  const formatRawPrivateKey = (bytes: Uint8Array): string => (
-    Array.from(bytes)
-      .map((byte) => byte.toString(16).padStart(2, '0'))
-      .join('')
-  );
-
-  const maskKey = (value: string): string => {
-    if (value.length <= 12) {
-      return '•'.repeat(value.length);
-    }
-
-    return `${value.slice(0, 4)}${'•'.repeat(12)}${value.slice(-6)}`;
-  };
-
-  const handleCopyExportedKey = async () => {
-    if (!exportedKey) {
-      return;
-    }
-
-    await Clipboard.setStringAsync(exportedKey.value);
-    AlertManager.alert('Copied', `${exportedKey.title} copied to clipboard.`, undefined, { type: 'success' });
-  };
-
-  const handleCloseExportedKey = () => {
-    setExportedKey(null);
-    setShowExportedKey(false);
-  };
-
-  const handleShowWalletAddress = () => {
-    if (!walletAddress) {
-      AlertManager.alert('Not Available', 'Wallet address is not available yet.');
-      return;
-    }
-
-    setExportedKey({
-      title: 'Wallet Address',
-      description: 'Your public Stellar account address. Use this only when another Stellar app or exchange asks for it.',
-      value: walletAddress,
-      valueLabel: 'Address',
-      warning: 'For normal C-Pay payments, share your C-Pay ID instead of this wallet address.',
-    });
-    setShowExportedKey(true);
-  };
-
-  const handleExportWalletKey = async (type: 'private' | 'stellar') => {
-    const wallet = await getAuthenticatedWallet(
-      'Export Wallet Key',
-      'Enter your C-Pay PIN to export this key',
-      'Export wallet key'
-    );
-
-    if (!wallet) {
-      AlertManager.alert('Authentication Required', 'Unlock your wallet with PIN or biometric to export keys.');
-      return;
-    }
-
-    const isPrivateKey = type === 'private';
-    const value = isPrivateKey
-      ? formatRawPrivateKey(wallet.keypair.rawSecretKey())
-      : wallet.secret;
-
-    setExportedKey({
-      title: isPrivateKey ? 'Private Key' : 'Stellar Secret Key',
-      description: isPrivateKey
-        ? 'Raw Ed25519 private seed in hex format.'
-        : 'Importable Stellar secret seed. This starts with S.',
-      valueLabel: 'Key',
-      value,
-      warning: isPrivateKey
-        ? 'Anyone with this private key can control your C-Pay wallet.'
-        : 'Anyone with this Stellar secret key can control your C-Pay wallet.',
-    });
-    setShowExportedKey(false);
-  };
-
-  const handleShowQRCode = () => {
-    setShowQRCode(!showQRCode);
-  };
+  const handleShowQRCode = () => setShowQRCode((current) => !current);
 
   const handleShareQRCode = async () => {
     try {
-      if (qrCodeRef.current) {
-        // Capture QR code as image
-        const uri = await qrCodeRef.current.capture();
-        
-        const message = 'Scan this QR code to send me pilot credits on C-Pay.';
-        
-        // Use expo-sharing for reliable image sharing on both platforms
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(uri, {
-            mimeType: 'image/png',
-            dialogTitle: message,
-            UTI: 'public.png', // For iOS
-          });
-        } else {
-          AlertManager.alert('Not Available', 'Sharing is not available on this device');
-        }
+      if (!qrCodeRef.current) return;
+      const uri = await qrCodeRef.current.capture();
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'image/png',
+          dialogTitle: 'Scan this QR code to send me pilot credits on C-Pay.',
+          UTI: 'public.png',
+        });
+      } else {
+        AlertManager.alert('Not Available', 'Sharing is not available on this device');
       }
     } catch (error) {
       console.error('Error sharing QR code:', error);
-      AlertManager.alert('Error', 'Failed to share QR code');
+      AlertManager.alert('Error', 'Failed to share QR code', undefined, { type: 'error' });
     }
   };
 
   const handleDownloadQRCode = async () => {
     try {
-      // Request media library permissions (write only, not read)
       const hasPermission = await requestPhotoSavePermission();
-
       if (!hasPermission) {
         AlertManager.alert('Permission Required', 'Please allow access to save the QR code to your gallery.');
         return;
       }
-
       if (qrCodeRef.current) {
-        // Capture QR code as image
         const uri = await qrCodeRef.current.capture();
-        
-        // Save directly to media library
-        const asset = await MediaLibrary.createAssetAsync(uri);
-        
-        AlertManager.alert('Success', 'QR code saved to gallery!');
+        await MediaLibrary.createAssetAsync(uri);
+        AlertManager.alert('Saved', 'QR code saved to your gallery.', undefined, { type: 'success' });
       }
     } catch (error) {
       console.error('Error downloading QR code:', error);
-      AlertManager.alert('Error', getMediaLibraryDownloadErrorMessage(error));
+      AlertManager.alert('Error', getMediaLibraryDownloadErrorMessage(error), undefined, { type: 'error' });
     }
+  };
+
+  const handleToggleNotifications = async (value: boolean) => {
+    setNotificationsEnabled(value);
+    await AsyncStorage.setItem('notifications_enabled', value.toString());
   };
 
   const handleSignOut = () => {
@@ -530,12 +303,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
             await AsyncStorage.removeItem('email_verified');
             await AsyncStorage.removeItem('user_email');
             clearSessionPin();
-            
             AlertManager.alert('Signed Out', 'You have been signed out successfully.', [
-              {
-                text: 'OK',
-                onPress: () => navigation.replace('Splash'),
-              },
+              { text: 'OK', onPress: () => navigation.replace('Splash') },
             ]);
           },
         },
@@ -543,98 +312,30 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
     );
   };
 
-  const handleToggleBiometric = async (value: boolean) => {
-    if (biometricSaving) {
-      return;
-    }
-
-    biometricSavingRef.current = true;
-    setBiometricSaving(true);
-    setBiometricEnabled(value);
-
-    try {
-      if (value) {
-        let available = biometricAvailable;
-        let type = biometricType;
-
-        if (!available) {
-          [available, type] = await Promise.all([
-            isBiometricAvailable(),
-            getBiometricType(),
-          ]);
-          setBiometricAvailable(available);
-          setBiometricType(type);
-        }
-
-        if (!available) {
-          setBiometricEnabled(false);
-          AlertManager.alert('Not Available', `${type} is not set up on this device. Please enable it in your device settings.`);
-          return;
-        }
-
-        const enabled = await enableBiometric({ skipAvailabilityCheck: true });
-        if (!enabled) {
-          setBiometricEnabled(false);
-          AlertManager.alert('Not Enabled', 'Biometric unlock was not enabled. Your PIN still works as usual.', undefined, { type: 'info' });
-          return;
-        }
-
-        await AsyncStorage.setItem('biometric_enabled', 'true');
-        syncBiometricPreference(true);
-      } else {
-        await clearBiometricBackup();
-        await AsyncStorage.setItem('biometric_enabled', 'false');
-        syncBiometricPreference(false);
-      }
-    } catch (error) {
-      setBiometricEnabled(!value);
-      console.error('Biometric setting update failed:', error);
-      AlertManager.alert('Biometric Error', 'Could not update biometric unlock. Please try again.', undefined, { type: 'error' });
-    } finally {
-      biometricSavingRef.current = false;
-      setBiometricSaving(false);
-    }
-  };
-
-  const handleToggleNotifications = async (value: boolean) => {
-    setNotificationsEnabled(value);
-    await AsyncStorage.setItem('notifications_enabled', value.toString());
-  };
-
   return (
     <Screen topInset={false}>
-      {/* Profile Header */}
+      {/* Identity */}
       <View style={styles.profileHeader}>
         <TouchableOpacity style={styles.profilePhotoContainer} onPress={handlePickImage}>
-          <Image 
-            source={profilePhoto ? { uri: profilePhoto } : require('../../assets/default-profile-image-cryptopay.png')} 
-            style={styles.profilePhoto} 
+          <Image
+            source={profilePhoto ? { uri: profilePhoto } : require('../../assets/default-profile-image-cryptopay.png')}
+            style={styles.profilePhoto}
           />
           <View style={styles.editIconContainer}>
             <Ionicons name="camera-outline" size={15} color={COLORS.primary} />
           </View>
         </TouchableOpacity>
-        
-        {displayName && <Text style={styles.profileName}>{displayName}</Text>}
-        <TouchableOpacity 
-          style={styles.addressContainer}
-          onPress={handleCopyAddress}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.profileAddress}>
-            {cpayId || formatWalletFingerprint(walletAddress)}
-          </Text>
+
+        {!!displayName && <Text style={styles.profileName}>{displayName}</Text>}
+        <TouchableOpacity style={styles.addressContainer} onPress={handleCopyAddress} activeOpacity={0.7}>
+          <Text style={styles.profileAddress}>{cpayId || formatWalletFingerprint(walletAddress)}</Text>
           <Ionicons name="copy-outline" size={20} color={COLORS.primary} />
         </TouchableOpacity>
       </View>
 
-      {/* QR Code Section */}
+      {/* QR code */}
       <View style={styles.section}>
-        <TouchableOpacity
-          style={styles.qrCodeCard}
-          onPress={handleShowQRCode}
-          activeOpacity={0.8}
-        >
+        <TouchableOpacity style={styles.qrCodeCard} onPress={handleShowQRCode} activeOpacity={0.8}>
           <View style={styles.qrCodeHeader}>
             <View style={styles.qrCodeHeaderLeft}>
               <Ionicons name="qr-code-outline" size={24} color={COLORS.primary} style={styles.qrCodeIcon} />
@@ -642,32 +343,23 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
             </View>
             <Ionicons name={showQRCode ? 'chevron-up' : 'chevron-down'} size={22} color={COLORS.textSecondary} />
           </View>
-          
+
           {showQRCode && (
             <View style={styles.qrCodeContent}>
               <ViewShot ref={qrCodeRef} options={{ format: 'png', quality: 1.0 }}>
                 <View style={styles.shareableQRCard}>
-                  {/* Profile Section */}
                   <View style={styles.shareCardProfile}>
-                    <Image 
-                      source={profilePhoto ? { uri: profilePhoto } : require('../../assets/default-profile-image-cryptopay.png')} 
-                      style={styles.shareCardProfilePhoto} 
+                    <Image
+                      source={profilePhoto ? { uri: profilePhoto } : require('../../assets/default-profile-image-cryptopay.png')}
+                      style={styles.shareCardProfilePhoto}
                     />
-                    {displayName && <Text style={styles.shareCardName}>{displayName}</Text>}
-                    <Text style={styles.shareCardAddress}>
-                      {cpayId || formatWalletFingerprint(walletAddress)}
-                    </Text>
+                    {!!displayName && <Text style={styles.shareCardName}>{displayName}</Text>}
+                    <Text style={styles.shareCardAddress}>{cpayId || formatWalletFingerprint(walletAddress)}</Text>
                   </View>
-                  
-                  {/* QR Code */}
+
                   <View style={styles.qrCodeWrapper}>
                     <QRCode
-                      value={generatePaymentQR(
-                        walletAddress,
-                        '0',
-                        displayName || 'C-Pay User',
-                        ''
-                      )}
+                      value={generatePaymentQR(walletAddress, '0', displayName || 'C-Pay User', '')}
                       size={220}
                       backgroundColor="white"
                       color={COLORS.primary}
@@ -677,8 +369,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
                       logoMargin={2}
                     />
                   </View>
-                  
-                  {/* Footer */}
+
                   <View style={styles.shareCardFooter}>
                     <Text style={styles.shareCardFooterText}>Scan to send pilot credits</Text>
                   </View>
@@ -687,14 +378,13 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
               <Text style={styles.qrCodeDescription}>
                 Let others scan this QR code to send you pilot credits
               </Text>
-              
-              {/* Action Buttons */}
+
               <View style={styles.qrActionButtons}>
                 <TouchableOpacity style={styles.qrActionButton} onPress={handleDownloadQRCode}>
                   <Ionicons name="download-outline" size={20} color={COLORS.text} />
                   <Text style={styles.qrActionButtonText}>Download</Text>
                 </TouchableOpacity>
-                
+
                 <TouchableOpacity style={[styles.qrActionButton, styles.qrShareButton]} onPress={handleShareQRCode}>
                   <Ionicons name="share-social-outline" size={20} color={COLORS.textInverse} />
                   <Text style={[styles.qrActionButtonText, styles.shareButtonText]}>Share</Text>
@@ -705,57 +395,35 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
         </TouchableOpacity>
       </View>
 
-      {/* Merchant Section */}
-      {merchantStatus && (
-        <Section title="Merchant">
-          <View style={styles.merchantCard}>
-            <View style={styles.merchantHeader}>
-              <Text style={styles.merchantBadge}>Merchant Account</Text>
-              <Text style={styles.merchantName}>{businessName}</Text>
-            </View>
-            <TouchableOpacity
-              style={styles.merchantButton}
-              onPress={() => navigation.navigate('MerchantDashboard')}
-            >
-              <Ionicons name="stats-chart-outline" size={20} color={COLORS.textInverse} style={styles.merchantButtonIcon} />
-              <Text style={styles.merchantButtonText}>Open Dashboard</Text>
-            </TouchableOpacity>
-          </View>
-        </Section>
-      )}
-
-      {/* Security Section */}
-      <Section title="Security & Privacy">
-        <View style={styles.settingsCard}>
+      {/* Security — kept near the top so security actions aren't buried */}
+      <Section title="Security">
+        <View style={styles.card}>
           <ActionRow
             style={styles.rowFlat}
-            icon="lock-closed-outline"
-            title={biometricType}
-            subtitle={biometricSaving ? 'Updating biometric unlock...' : `Quick unlock with ${biometricType.toLowerCase()}`}
-            right={
-              <Switch
-                value={biometricEnabled}
-                onValueChange={handleToggleBiometric}
-                disabled={biometricSaving}
-                trackColor={{ false: COLORS.border, true: COLORS.primary + '50' }}
-                thumbColor={biometricEnabled ? COLORS.primary : COLORS.textSecondary}
-              />
-            }
-          />
-          <View style={styles.settingDivider} />
-          <ActionRow
-            style={styles.rowFlat}
-            icon="keypad-outline"
-            title="Change PIN"
-            subtitle="Update your 6-digit PIN"
-            onPress={() => navigation.navigate('ChangePIN')}
+            icon="shield-checkmark-outline"
+            title="Security Center"
+            subtitle="PIN, biometrics, backup, wallet keys"
+            onPress={() => navigation.navigate('SecurityCenter')}
           />
         </View>
       </Section>
 
-      {/* Preferences Section */}
+      {/* Wallet */}
+      <Section title="Wallet">
+        <View style={styles.card}>
+          <ActionRow
+            style={styles.rowFlat}
+            icon="receipt-outline"
+            title="Transaction history"
+            subtitle="View all your payments"
+            onPress={() => navigation.navigate('TransactionHistory')}
+          />
+        </View>
+      </Section>
+
+      {/* Preferences */}
       <Section title="Preferences">
-        <View style={styles.settingsCard}>
+        <View style={styles.card}>
           <ActionRow
             style={styles.rowFlat}
             icon="notifications-outline"
@@ -770,312 +438,96 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
               />
             }
           />
-          <View style={styles.settingDivider} />
-          <ActionRow
-            style={styles.rowFlat}
-            icon="receipt-outline"
-            title="Transaction History"
-            subtitle="View all transactions"
-            onPress={() => navigation.navigate('TransactionHistory')}
-          />
         </View>
       </Section>
 
-      {/* Account Section */}
-      <Section title="Account">
-        <View style={styles.settingsCard}>
-          <ActionRow
-            style={styles.rowFlat}
-            icon="finger-print-outline"
-            title="Wallet Address"
-            subtitle="Show public Stellar address"
-            onPress={handleShowWalletAddress}
-          />
-          <View style={styles.settingDivider} />
-          <ActionRow
-            style={styles.rowFlat}
-            icon="cloud-done-outline"
-            title="Cloud Backup"
-            subtitle="Update encrypted recovery backup"
-            onPress={() => navigation.navigate('CloudBackupSetup', { fromSettings: true })}
-          />
-          <View style={styles.settingDivider} />
-          <ActionRow
-            style={styles.rowFlat}
-            icon="wallet-outline"
-            title="Backup Wallet"
-            subtitle="Export private key"
-            onPress={() => handleExportWalletKey('private')}
-          />
-          <View style={styles.settingDivider} />
-          <ActionRow
-            style={styles.rowFlat}
-            icon="key-outline"
-            title="Recovery Key"
-            subtitle="Export Stellar secret key"
-            onPress={() => handleExportWalletKey('stellar')}
-          />
-          <View style={styles.settingDivider} />
-          <ActionRow
-            style={styles.rowFlat}
-            icon="speedometer-outline"
-            title="Transaction Limits"
-            subtitle="Daily & monthly limits"
-            onPress={() => AlertManager.alert('Coming Soon', 'Transaction limits feature will be available soon.')}
-          />
-        </View>
+      {/* Merchant */}
+      <Section title="Merchant">
+        {merchantStatus ? (
+          <View style={styles.merchantCard}>
+            <View style={styles.merchantHeader}>
+              <Text style={styles.merchantBadge}>Merchant Account</Text>
+              <Text style={styles.merchantName}>{businessName}</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.merchantButton}
+              onPress={() => navigation.navigate('MerchantDashboard')}
+            >
+              <Ionicons name="stats-chart-outline" size={20} color={COLORS.textInverse} style={styles.merchantButtonIcon} />
+              <Text style={styles.merchantButtonText}>Open Dashboard</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.card}>
+            <ActionRow
+              style={styles.rowFlat}
+              icon="storefront-outline"
+              title="Become a Merchant"
+              subtitle="Accept payments from customers"
+              onPress={() => navigation.navigate('MerchantRegistration')}
+            />
+          </View>
+        )}
       </Section>
 
-      {/* More Section */}
-      <Section title="More">
-        <View style={styles.settingsCard}>
-          {!merchantStatus && (
-            <>
-              <ActionRow
-                style={styles.rowFlat}
-                icon="storefront-outline"
-                title="Become a Merchant"
-                subtitle="Accept payments"
-                onPress={() => navigation.navigate('MerchantRegistration')}
-              />
-              <View style={styles.settingDivider} />
-            </>
-          )}
+      {/* Support */}
+      <Section title="Support">
+        <View style={styles.card}>
           <ActionRow
             style={styles.rowFlat}
             icon="chatbubble-ellipses-outline"
             title="Help & Support"
-            onPress={() => AlertManager.alert('Coming Soon', 'Help & Support will be available soon.')}
-          />
-          <View style={styles.settingDivider} />
-          <ActionRow
-            style={styles.rowFlat}
-            icon="shield-checkmark-outline"
-            title="Privacy Policy"
-            onPress={() => AlertManager.alert('Privacy Policy', 'Coming soon')}
-          />
-          <View style={styles.settingDivider} />
-          <ActionRow
-            style={styles.rowFlat}
-            icon="document-text-outline"
-            title="Terms of Service"
-            onPress={() => AlertManager.alert('Terms of Service', 'Coming soon')}
-          />
-          <View style={styles.settingDivider} />
-          <ActionRow
-            style={styles.rowFlat}
-            icon="information-circle-outline"
-            title="About"
-            onPress={() => AlertManager.alert('About C-Pay', 'Version 1.0.3\n\nC-Pay is a closed-pilot payment app using test credits on Stellar testnet.\n\nPilot credits are not real money and have no cash value.\n\n© 2026 C-Pay')}
+            subtitle="Guides and contact options"
+            onPress={() => navigation.navigate('Info', { doc: 'support' })}
           />
         </View>
       </Section>
 
-      {/* Account Actions */}
+      {/* Legal */}
+      <Section title="Legal">
+        <View style={styles.card}>
+          <ActionRow
+            style={styles.rowFlat}
+            icon="lock-closed-outline"
+            title="Privacy Policy"
+            onPress={() => navigation.navigate('Info', { doc: 'privacy' })}
+          />
+          <View style={styles.divider} />
+          <ActionRow
+            style={styles.rowFlat}
+            icon="document-text-outline"
+            title="Terms of Service"
+            onPress={() => navigation.navigate('Info', { doc: 'terms' })}
+          />
+          <View style={styles.divider} />
+          <ActionRow
+            style={styles.rowFlat}
+            icon="information-circle-outline"
+            title="About"
+            onPress={() => navigation.navigate('Info', { doc: 'about' })}
+          />
+        </View>
+      </Section>
+
+      {/* Sign out */}
       <View style={styles.signOutSection}>
         <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
           <Ionicons name="log-out-outline" size={20} color={COLORS.error} style={styles.signOutButtonIcon} />
           <Text style={styles.signOutButtonText}>Sign Out</Text>
         </TouchableOpacity>
-        <Text style={styles.signOutHint}>
-          Your wallet will be safe. Sign back in anytime.
-        </Text>
+        <Text style={styles.signOutHint}>Your wallet will be safe. Sign back in anytime.</Text>
       </View>
 
-      {/* Footer */}
       <View style={styles.footer}>
         <Text style={styles.footerText}>C-Pay v1.0.3</Text>
         <Text style={styles.footerSubtext}>Built for closed-pilot test payments</Text>
         <Text style={styles.footerSubtext}>Stellar Testnet</Text>
       </View>
-
-    <Modal
-      visible={!!exportedKey}
-      animationType="fade"
-      transparent
-      onRequestClose={handleCloseExportedKey}
-    >
-      <View style={styles.modalBackdrop}>
-        <View style={styles.exportModal}>
-          <View style={styles.exportModalHeader}>
-            <View style={styles.exportIconCircle}>
-              <Ionicons name="key-outline" size={24} color={COLORS.primary} />
-            </View>
-            <TouchableOpacity onPress={handleCloseExportedKey} style={styles.exportCloseButton}>
-              <Ionicons name="close" size={22} color={COLORS.textSecondary} />
-            </TouchableOpacity>
-          </View>
-
-          <Text style={styles.exportTitle}>{exportedKey?.title}</Text>
-          <Text style={styles.exportDescription}>{exportedKey?.description}</Text>
-
-          <View style={styles.exportWarning}>
-            <Ionicons name="alert-circle-outline" size={18} color={COLORS.warning} />
-            <Text style={styles.exportWarningText}>{exportedKey?.warning}</Text>
-          </View>
-
-          <View style={styles.exportKeyBox}>
-            <Text style={styles.exportKeyLabel}>{exportedKey?.valueLabel || 'Value'}</Text>
-            <Text style={styles.exportKeyValue} selectable={showExportedKey}>
-              {exportedKey ? (showExportedKey ? exportedKey.value : maskKey(exportedKey.value)) : ''}
-            </Text>
-          </View>
-
-          <View style={styles.exportActions}>
-            <TouchableOpacity
-              style={styles.exportSecondaryButton}
-              onPress={() => setShowExportedKey((current) => !current)}
-            >
-              <Ionicons name={showExportedKey ? 'eye-off-outline' : 'eye-outline'} size={18} color={COLORS.primary} />
-              <Text style={styles.exportSecondaryButtonText}>
-                {showExportedKey ? 'Hide' : 'Reveal'}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.exportPrimaryButton} onPress={handleCopyExportedKey}>
-              <Ionicons name="copy-outline" size={18} color={COLORS.textInverse} />
-              <Text style={styles.exportPrimaryButtonText}>Copy</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
     </Screen>
   );
 };
 
 const styles = StyleSheet.create({
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.58)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: SPACING.lg,
-  },
-  exportModal: {
-    width: '100%',
-    maxWidth: 420,
-    backgroundColor: COLORS.surface,
-    borderRadius: BORDER_RADIUS.xl,
-    padding: SPACING.lg,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    ...SHADOWS.lg,
-  },
-  exportModalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: SPACING.md,
-  },
-  exportIconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.primary + '14',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  exportCloseButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.background,
-  },
-  exportTitle: {
-    fontSize: FONT_SIZES.xl,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginBottom: SPACING.xs,
-  },
-  exportDescription: {
-    fontSize: FONT_SIZES.sm,
-    color: COLORS.textSecondary,
-    lineHeight: 20,
-    marginBottom: SPACING.md,
-  },
-  exportWarning: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: SPACING.xs,
-    backgroundColor: COLORS.warningBg,
-    borderRadius: BORDER_RADIUS.md,
-    padding: SPACING.md,
-    marginBottom: SPACING.md,
-  },
-  exportWarningText: {
-    flex: 1,
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.warningDark,
-    lineHeight: 18,
-  },
-  exportKeyBox: {
-    backgroundColor: COLORS.background,
-    borderRadius: BORDER_RADIUS.md,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: SPACING.md,
-    marginBottom: SPACING.lg,
-  },
-  exportKeyLabel: {
-    fontSize: FONT_SIZES.xs,
-    fontWeight: '700',
-    color: COLORS.textSecondary,
-    textTransform: 'uppercase',
-    marginBottom: SPACING.xs,
-  },
-  exportKeyValue: {
-    fontSize: FONT_SIZES.sm,
-    color: COLORS.text,
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    lineHeight: 20,
-  },
-  exportActions: {
-    flexDirection: 'row',
-    gap: SPACING.sm,
-  },
-  exportSecondaryButton: {
-    flex: 1,
-    minHeight: 46,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: SPACING.xs,
-    borderRadius: BORDER_RADIUS.md,
-    borderWidth: 1,
-    borderColor: COLORS.primary,
-    backgroundColor: COLORS.surface,
-  },
-  exportSecondaryButtonText: {
-    fontSize: FONT_SIZES.sm,
-    fontWeight: '700',
-    color: COLORS.primary,
-  },
-  exportPrimaryButton: {
-    flex: 1,
-    minHeight: 46,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: SPACING.xs,
-    borderRadius: BORDER_RADIUS.md,
-    backgroundColor: COLORS.primary,
-  },
-  exportPrimaryButtonText: {
-    fontSize: FONT_SIZES.sm,
-    fontWeight: '700',
-    color: COLORS.textInverse,
-  },
-  rowFlat: {
-    backgroundColor: 'transparent',
-    borderRadius: 0,
-    paddingHorizontal: SPACING.sm,
-  },
-  signOutSection: {
-    marginBottom: SPACING.xl,
-  },
   profileHeader: {
     alignItems: 'center',
     marginBottom: SPACING.xl,
@@ -1092,21 +544,6 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: COLORS.primary,
   },
-  defaultAvatar: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: COLORS.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: COLORS.primaryDark,
-  },
-  defaultAvatarText: {
-    fontSize: 36,
-    fontWeight: '700',
-    color: COLORS.textInverse,
-  },
   editIconContainer: {
     position: 'absolute',
     bottom: 0,
@@ -1119,9 +556,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 2,
     borderColor: COLORS.background,
-  },
-  editIcon: {
-    fontSize: 14,
   },
   profileName: {
     fontSize: FONT_SIZES.xxl,
@@ -1149,13 +583,21 @@ const styles = StyleSheet.create({
   section: {
     marginBottom: SPACING.xl,
   },
-  sectionTitle: {
-    fontSize: FONT_SIZES.sm,
-    fontWeight: '600',
-    color: COLORS.textSecondary,
-    marginBottom: SPACING.md,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
+  card: {
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.lg,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: SPACING.sm,
+  },
+  rowFlat: {
+    backgroundColor: 'transparent',
+    borderRadius: 0,
+  },
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: COLORS.border,
+    marginHorizontal: SPACING.sm,
   },
   qrCodeCard: {
     backgroundColor: COLORS.surface,
@@ -1173,17 +615,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   qrCodeIcon: {
-    fontSize: 24,
     marginRight: SPACING.sm,
   },
   qrCodeTitle: {
     fontSize: FONT_SIZES.lg,
     fontWeight: '600',
     color: COLORS.text,
-  },
-  qrCodeToggle: {
-    fontSize: FONT_SIZES.lg,
-    color: COLORS.textSecondary,
   },
   qrCodeContent: {
     alignItems: 'center',
@@ -1260,6 +697,7 @@ const styles = StyleSheet.create({
     borderRadius: BORDER_RADIUS.md,
     borderWidth: 1,
     borderColor: COLORS.border,
+    gap: SPACING.xs,
     ...SHADOWS.sm,
   },
   qrShareButton: {
@@ -1270,7 +708,6 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.sm,
     fontWeight: '600',
     color: COLORS.text,
-    marginLeft: SPACING.xs,
   },
   shareButtonText: {
     color: COLORS.textInverse,
@@ -1308,54 +745,15 @@ const styles = StyleSheet.create({
     borderRadius: BORDER_RADIUS.md,
   },
   merchantButtonIcon: {
-    fontSize: 20,
     marginRight: SPACING.sm,
   },
   merchantButtonText: {
     fontSize: FONT_SIZES.md,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: COLORS.textInverse,
   },
-  settingsCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: BORDER_RADIUS.lg,
-    padding: SPACING.md,
-    ...SHADOWS.sm,
-  },
-  settingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: SPACING.md,
-    paddingHorizontal: SPACING.sm,
-  },
-  settingInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  settingIcon: {
-    fontSize: 24,
-    marginRight: SPACING.md,
-  },
-  settingLabel: {
-    fontSize: FONT_SIZES.md,
-    fontWeight: '500',
-    color: COLORS.text,
-  },
-  settingDescription: {
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.textSecondary,
-    marginTop: 2,
-  },
-  settingArrow: {
-    fontSize: FONT_SIZES.lg,
-    color: COLORS.textSecondary,
-  },
-  settingDivider: {
-    height: 1,
-    backgroundColor: COLORS.border,
-    marginHorizontal: SPACING.sm,
+  signOutSection: {
+    marginBottom: SPACING.xl,
   },
   signOutButton: {
     flexDirection: 'row',
@@ -1369,7 +767,6 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.sm,
   },
   signOutButtonIcon: {
-    fontSize: 20,
     marginRight: SPACING.sm,
   },
   signOutButtonText: {

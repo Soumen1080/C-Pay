@@ -31,6 +31,8 @@ import { ProfileSetupScreen } from '../screens/ProfileSetupScreen';
 import { PaymentProcessingScreen } from '../screens/PaymentProcessingScreen';
 import { PaymentSuccessScreen } from '../screens/PaymentSuccessScreen';
 import { PaymentFailureScreen } from '../screens/PaymentFailureScreen';
+import { SecurityCenterScreen } from '../screens/SecurityCenterScreen';
+import { InfoScreen, type InfoDoc } from '../screens/InfoScreen';
 import { COLORS, SPACING } from '../constants/theme';
 
 type RootStackParamList = {
@@ -75,6 +77,8 @@ type RootStackParamList = {
   MerchantQRGenerator: undefined;
   MerchantGlobalQR: undefined;
   MerchantTransactions: undefined;
+  SecurityCenter: undefined;
+  Info: { doc: InfoDoc };
 };
 
 type MainTabsParamList = {
@@ -273,12 +277,22 @@ export const Navigation = () => {
             headerShown: false,
           }}
         />
-        <Stack.Screen 
-          name="MerchantTransactions" 
+        <Stack.Screen
+          name="MerchantTransactions"
           component={MerchantTransactionsScreen}
           options={{
             headerShown: false,
           }}
+        />
+        <Stack.Screen
+          name="SecurityCenter"
+          component={SecurityCenterScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="Info"
+          component={InfoScreen}
+          options={{ headerShown: false }}
         />
       </Stack.Navigator>
     </NavigationContainer>

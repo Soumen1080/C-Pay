@@ -19,6 +19,8 @@ const LEGACY_PIN_KDF_ITERATIONS = 120000;
 const PIN_KDF_ITERATIONS = 20000;
 const WALLET_KDF_ITERATIONS = 80000;
 const SESSION_PIN_TTL_MS = 15 * 60 * 1000;
+/** How long the wallet stays unlocked after authentication, in minutes. */
+export const SESSION_TIMEOUT_MINUTES = Math.round(SESSION_PIN_TTL_MS / 60000);
 
 type StoredWalletPayload = {
   version: 4;
