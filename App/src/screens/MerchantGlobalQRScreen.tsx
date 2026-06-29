@@ -51,6 +51,20 @@ export const MerchantGlobalQRScreen: React.FC<MerchantGlobalQRScreenProps> = ({
 
       const profile = await getMerchantProfile(address);
       if (profile) {
+        // Gate: unapproved merchants cannot show QR codes
+        const status = profile.verification_status || 'pending';
+        if (status !== 'approved') {
+          AlertManager.alert(
+            'Not Yet Approved',
+            status === 'rejected'
+              ? 'Your merchant account was not approved. QR payments are disabled. Please contact support.'
+              : 'Your merchant account is still under review. QR payments will be enabled once approved.',
+            [{ text: 'OK', onPress: () => navigation.goBack() }]
+          );
+          setLoading(false);
+          return;
+        }
+
         setBusinessName(profile.business_name);
         setWalletAddress(address);
         

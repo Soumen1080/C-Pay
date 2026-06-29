@@ -72,6 +72,8 @@ export const MerchantDashboardScreen: React.FC<
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [walletAddress, setWalletAddress] = useState('');
   const [merchantId, setMerchantId] = useState<string | null>(null);
+  const [verificationStatus, setVerificationStatus] = useState<'pending' | 'approved' | 'rejected'>('pending');
+  const [rejectionReason, setRejectionReason] = useState<string | null>(null);
   const [contractSynced, setContractSynced] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [totalRevenue, setTotalRevenue] = useState('0');
@@ -101,6 +103,8 @@ export const MerchantDashboardScreen: React.FC<
         setBusinessName(profile.business_name);
         setLogoUrl(profile.logo_url && profile.logo_url !== 'default-merchant-logo' ? profile.logo_url : null);
         resolvedMerchantId = profile.id || resolvedMerchantId;
+        setVerificationStatus((profile.verification_status as 'pending' | 'approved' | 'rejected') || 'pending');
+        setRejectionReason(profile.rejection_reason || null);
       }
       setMerchantId(resolvedMerchantId);
 
@@ -198,6 +202,39 @@ export const MerchantDashboardScreen: React.FC<
           <Text style={styles.statLabel}>Pending</Text>
         </View>
       </View>
+
+      {/* KYB / verification status banner */}
+      {verificationStatus === 'pending' && (
+        <View style={[styles.kybBanner, styles.kybPending]}>
+          <Ionicons name="time-outline" size={18} color={COLORS.warning} />
+          <View style={styles.kybBannerText}>
+            <Text style={[styles.kybBannerTitle, { color: COLORS.warning }]}>Verification under review</Text>
+            <Text style={styles.kybBannerSubtitle}>
+              Your merchant account is being reviewed. QR payments will be enabled once approved.
+            </Text>
+          </View>
+        </View>
+      )}
+      {verificationStatus === 'rejected' && (
+        <View style={[styles.kybBanner, styles.kybRejected]}>
+          <Ionicons name="close-circle-outline" size={18} color={COLORS.error} />
+          <View style={styles.kybBannerText}>
+            <Text style={[styles.kybBannerTitle, { color: COLORS.error }]}>Verification rejected</Text>
+            <Text style={styles.kybBannerSubtitle}>
+              {rejectionReason || 'Your application was not approved. Please contact support.'}
+            </Text>
+          </View>
+        </View>
+      )}
+      {verificationStatus === 'approved' && (
+        <View style={[styles.kybBanner, styles.kybApproved]}>
+          <Ionicons name="shield-checkmark-outline" size={18} color={COLORS.success} />
+          <View style={styles.kybBannerText}>
+            <Text style={[styles.kybBannerTitle, { color: COLORS.success }]}>Account approved</Text>
+            <Text style={styles.kybBannerSubtitle}>Your merchant account is active and ready to accept payments.</Text>
+          </View>
+        </View>
+      )}
 
       {/* Business status */}
       <Section title="Business status">
@@ -550,5 +587,39 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: FONT_SIZES.xs,
     fontWeight: '700',
+  },
+  kybBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: SPACING.sm,
+    borderRadius: BORDER_RADIUS.lg,
+    padding: SPACING.md,
+    marginBottom: SPACING.md,
+    borderWidth: 1,
+  },
+  kybPending: {
+    backgroundColor: COLORS.warningBg,
+    borderColor: COLORS.warning + '40',
+  },
+  kybRejected: {
+    backgroundColor: COLORS.errorBg,
+    borderColor: COLORS.error + '40',
+  },
+  kybApproved: {
+    backgroundColor: COLORS.successBg,
+    borderColor: COLORS.success + '40',
+  },
+  kybBannerText: {
+    flex: 1,
+  },
+  kybBannerTitle: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  kybBannerSubtitle: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.textSecondary,
+    lineHeight: 16,
   },
 });
