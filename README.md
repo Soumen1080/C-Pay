@@ -1173,10 +1173,35 @@ npx expo start --clear
 | `set_merchant_active` | Enable or disable merchant |
 | `merchant` | Read merchant record |
 | `create_intent` | Create payment intent with bounded expiry |
-| `confirm_intent` | Relayer confirms payment hash |
-| `cancel_intent` | Payer cancels intent |
+| `mark_submitted` | Relayer marks intent as `Submitted` after broadcasting payment |
+| `confirm_intent` | Relayer confirms payment hash on-chain (transitions to `Confirmed`) |
+| `cancel_intent` | Payer cancels intent before relayer submits payment |
+| `expire_intent` | Admin explicitly marks an intent as `Expired` after `expires_at` passes |
+| `mark_reconciliation_needed` | Admin flags a stuck intent for manual review |
 | `intent` | Read intent |
 | `extend_ttl` | Extend instance TTL |
+
+#### Payment Intent Lifecycle
+
+```
+                    payer.cancel_intent()
+                    ┌──────────────────────→ Cancelled (terminal)
+                    │
+Created ────────────┤
+                    │   relayer.mark_submitted()
+                    └──────────────────────→ Submitted
+                                               │
+                                     relayer.confirm_intent()
+                                               ├──────────→ Confirmed (terminal)
+                                               │
+                                     admin.mark_reconciliation_needed()
+                                               ├──────────→ ReconciliationNeeded (terminal)
+                                               │
+Created / Submitted (after expires_at) ────────┘
+        admin.expire_intent()                        → Expired (terminal)
+```
+
+**Trust boundary:** Token movement happens as a classic Stellar payment operation signed by the payer. The contract does not custody tokens or invoke the Stellar Asset Contract directly. The relayer observes the Stellar payment, then calls `mark_submitted` / `confirm_intent` to advance the on-chain intent state. See the contract source for the full trust boundary documentation.
 
 ---
 
