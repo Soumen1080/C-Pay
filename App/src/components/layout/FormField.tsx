@@ -55,12 +55,17 @@ export const FormField = forwardRef<TextInput, FormFieldProps>(
       style,
       onFocus,
       onBlur,
+      accessibilityLabel,
+      placeholder,
       ...inputProps
     },
     ref
   ) => {
     const [focused, setFocused] = React.useState(false);
     const hasError = !!error;
+
+    // Derive accessible label: prefer explicit prop, then label, then placeholder.
+    const derivedAccessibilityLabel = accessibilityLabel || label || placeholder;
 
     return (
       <View style={containerStyle}>
@@ -79,6 +84,9 @@ export const FormField = forwardRef<TextInput, FormFieldProps>(
               size={20}
               color={hasError ? COLORS.error : COLORS.textTertiary}
               style={styles.leftIcon}
+              // Decorative — label covers purpose
+              accessibilityElementsHidden
+              importantForAccessibility="no"
             />
           )}
           <TextInput
@@ -89,6 +97,7 @@ export const FormField = forwardRef<TextInput, FormFieldProps>(
               monospace && styles.inputMono,
               style,
             ]}
+            placeholder={placeholder}
             placeholderTextColor={COLORS.textTertiary}
             multiline={multiline}
             onFocus={(e) => {
@@ -99,6 +108,8 @@ export const FormField = forwardRef<TextInput, FormFieldProps>(
               setFocused(false);
               onBlur?.(e);
             }}
+            accessibilityLabel={derivedAccessibilityLabel}
+            accessibilityState={{ disabled: inputProps.editable === false }}
             {...inputProps}
           />
           {!!rightAction && (
@@ -114,7 +125,12 @@ export const FormField = forwardRef<TextInput, FormFieldProps>(
           )}
         </View>
         {(hasError || !!helper) && (
-          <Text style={[styles.helper, hasError && styles.error]}>
+          <Text
+            style={[styles.helper, hasError && styles.error]}
+            // Announce errors as an alert so screen readers read them immediately.
+            accessibilityRole={hasError ? 'alert' : undefined}
+            accessibilityLiveRegion={hasError ? 'polite' : undefined}
+          >
             {hasError ? error : helper}
           </Text>
         )}
@@ -170,6 +186,11 @@ const styles = StyleSheet.create({
   rightAction: {
     paddingLeft: SPACING.sm,
     paddingVertical: SPACING.sm,
+    // Ensure the icon button meets 44pt tap target height
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   helper: {
     fontSize: FONT_SIZES.sm,

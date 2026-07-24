@@ -64,32 +64,70 @@ export const StatusSheet: React.FC<StatusSheetProps> = ({
       animationType="fade"
       statusBarTranslucent
       onRequestClose={onRequestClose}
+      // Mark as a modal so iOS VoiceOver traps focus inside it and Android
+      // TalkBack treats it as a dialog window.
+      accessibilityViewIsModal
     >
       <TouchableOpacity
         style={styles.backdrop}
         activeOpacity={1}
         onPress={dismissable ? onRequestClose : undefined}
+        // When the sheet is non-dismissable, tell screen readers the backdrop
+        // is not interactive so they don't try to activate it.
+        accessibilityElementsHidden={!dismissable}
+        importantForAccessibility={dismissable ? 'yes' : 'no'}
+        accessible={dismissable}
+        accessibilityRole={dismissable ? 'button' : undefined}
+        accessibilityLabel={dismissable ? 'Dismiss' : undefined}
       >
         <TouchableOpacity
           activeOpacity={1}
           style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, SPACING.lg) }]}
           // Prevent backdrop press from closing when tapping the sheet itself.
           onPress={() => {}}
+          accessible={false}
         >
-          <View style={styles.grabber} />
+          {/* Grabber is decorative */}
+          <View
+            style={styles.grabber}
+            accessibilityElementsHidden
+            importantForAccessibility="no"
+          />
 
           {variant === 'loading' ? (
-            <View style={[styles.iconBadge, { backgroundColor: COLORS.primaryLight }]}>
+            <View
+              style={[styles.iconBadge, { backgroundColor: COLORS.primaryLight }]}
+              accessibilityElementsHidden
+              importantForAccessibility="no"
+            >
               <ActivityIndicator size="large" color={COLORS.primary} />
             </View>
           ) : (
-            <View style={[styles.iconBadge, { backgroundColor: VARIANT[variant].bg }]}>
+            <View
+              style={[styles.iconBadge, { backgroundColor: VARIANT[variant].bg }]}
+              accessibilityElementsHidden
+              importantForAccessibility="no"
+            >
               <Ionicons name={VARIANT[variant].icon} size={40} color={VARIANT[variant].fg} />
             </View>
           )}
 
-          <Text style={styles.title}>{title}</Text>
-          {!!message && <Text style={styles.message}>{message}</Text>}
+          <Text
+            style={styles.title}
+            // The title is the first thing screen readers should announce when
+            // the sheet appears.
+            accessibilityRole="header"
+          >
+            {title}
+          </Text>
+          {!!message && (
+            <Text
+              style={styles.message}
+              accessibilityLiveRegion="polite"
+            >
+              {message}
+            </Text>
+          )}
 
           {variant !== 'loading' && actions && actions.length > 0 && (
             <View style={styles.actions}>

@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, StyleProp, ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
+import { A11Y } from '../utils/strings';
 
 export interface MerchantQRActionsProps {
   onShare: () => void;
@@ -22,20 +23,44 @@ export const MerchantQRActions: React.FC<MerchantQRActionsProps> = ({
   style,
 }) => (
   <View style={[styles.row, style]}>
-    <ActionButton icon="share-social-outline" label="Share" onPress={onShare} />
-    <ActionButton icon="download-outline" label="Download" onPress={onDownload} />
-    {onNew && <ActionButton icon="add-outline" label="New QR" onPress={onNew} />}
+    <ActionButton
+      icon="share-social-outline"
+      label="Share"
+      accessibilityLabel={A11Y.SHARE}
+      onPress={onShare}
+    />
+    <ActionButton
+      icon="download-outline"
+      label="Download"
+      accessibilityLabel={A11Y.DOWNLOAD}
+      onPress={onDownload}
+    />
+    {onNew && (
+      <ActionButton
+        icon="add-outline"
+        label="New QR"
+        accessibilityLabel="Create new QR code"
+        onPress={onNew}
+      />
+    )}
   </View>
 );
 
 const ActionButton: React.FC<{
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
+  accessibilityLabel: string;
   onPress: () => void;
-}> = ({ icon, label, onPress }) => (
-  <TouchableOpacity style={styles.button} onPress={onPress} activeOpacity={0.8}>
-    <Ionicons name={icon} size={20} color={COLORS.primary} />
-    <Text style={styles.label}>{label}</Text>
+}> = ({ icon, label, accessibilityLabel, onPress }) => (
+  <TouchableOpacity
+    style={styles.button}
+    onPress={onPress}
+    activeOpacity={0.8}
+    accessibilityRole="button"
+    accessibilityLabel={accessibilityLabel}
+  >
+    <Ionicons name={icon} size={20} color={COLORS.primary} accessibilityElementsHidden importantForAccessibility="no" />
+    <Text style={styles.label} importantForAccessibility="no-hide-descendants">{label}</Text>
   </TouchableOpacity>
 );
 
@@ -55,6 +80,8 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     borderRadius: BORDER_RADIUS.lg,
     paddingVertical: SPACING.md,
+    // Explicit minimum tap target
+    minHeight: 44,
   },
   label: {
     fontSize: FONT_SIZES.sm,

@@ -76,6 +76,7 @@ export const PaymentReviewSheet: React.FC<PaymentReviewSheetProps> = ({
       animationType="slide"
       statusBarTranslucent
       onRequestClose={handleBackdrop}
+      accessibilityViewIsModal
     >
       <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={handleBackdrop}>
         <TouchableOpacity
@@ -115,9 +116,18 @@ export const PaymentReviewSheet: React.FC<PaymentReviewSheetProps> = ({
             </View>
 
             {/* Amount */}
-            <View style={styles.amountBlock}>
-              <Text style={styles.amountLabel}>Amount</Text>
-              <Text style={styles.amountValue}>
+            <View
+              style={styles.amountBlock}
+              accessible
+              accessibilityLabel={`Amount: ${hasAmount ? formatMoneyAmount(amountNum) : 'not set'}`}
+            >
+              <Text style={styles.amountLabel} importantForAccessibility="no-hide-descendants">Amount</Text>
+              <Text
+                style={styles.amountValue}
+                importantForAccessibility="no"
+                // Cap scaling so large-text mode keeps the amount on one line
+                maxFontSizeMultiplier={1.2}
+              >
                 {hasAmount ? formatMoneyAmount(amountNum) : '—'}
               </Text>
             </View>

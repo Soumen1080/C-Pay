@@ -27,6 +27,10 @@ export interface ActionRowProps {
   /** Render in a destructive style. */
   destructive?: boolean;
   disabled?: boolean;
+  /** Accessible label. Defaults to the title (+ value if present). */
+  accessibilityLabel?: string;
+  /** Accessible hint describing what happens on press. */
+  accessibilityHint?: string;
   style?: StyleProp<ViewStyle>;
 }
 
@@ -47,11 +51,16 @@ export const ActionRow: React.FC<ActionRowProps> = ({
   right,
   destructive = false,
   disabled = false,
+  accessibilityLabel,
+  accessibilityHint,
   style,
 }) => {
   const chevron = showChevron ?? !!onPress;
   const tint = destructive ? COLORS.error : iconColor || COLORS.primary;
   const badgeBg = destructive ? COLORS.errorBg : iconBackground || COLORS.primaryLight;
+
+  // Default accessible label: title + current value (if text, not a custom node)
+  const defaultLabel = value ? `${title}, ${value}` : title;
 
   const Container: any = onPress ? TouchableOpacity : View;
 
@@ -62,9 +71,16 @@ export const ActionRow: React.FC<ActionRowProps> = ({
       disabled={disabled}
       activeOpacity={0.7}
       accessibilityRole={onPress ? 'button' : undefined}
+      accessibilityLabel={onPress ? (accessibilityLabel || defaultLabel) : undefined}
+      accessibilityHint={accessibilityHint}
+      accessibilityState={onPress ? { disabled } : undefined}
     >
       {!!icon && (
-        <View style={[styles.iconBadge, { backgroundColor: badgeBg }]}>
+        <View
+          style={[styles.iconBadge, { backgroundColor: badgeBg }]}
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+        >
           <Ionicons name={icon} size={20} color={tint} />
         </View>
       )}
@@ -72,11 +88,17 @@ export const ActionRow: React.FC<ActionRowProps> = ({
         <Text
           style={[styles.title, destructive && styles.titleDestructive]}
           numberOfLines={1}
+          // Title is covered by the container's accessibilityLabel on tappable rows
+          importantForAccessibility={onPress ? 'no-hide-descendants' : 'yes'}
         >
           {title}
         </Text>
         {!!subtitle && (
-          <Text style={styles.subtitle} numberOfLines={2}>
+          <Text
+            style={styles.subtitle}
+            numberOfLines={2}
+            importantForAccessibility={onPress ? 'no-hide-descendants' : 'yes'}
+          >
             {subtitle}
           </Text>
         )}
@@ -84,7 +106,11 @@ export const ActionRow: React.FC<ActionRowProps> = ({
       {right ? (
         right
       ) : (
-        <View style={styles.trailing}>
+        <View
+          style={styles.trailing}
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+        >
           {!!value && (
             <Text style={styles.value} numberOfLines={1}>
               {value}
