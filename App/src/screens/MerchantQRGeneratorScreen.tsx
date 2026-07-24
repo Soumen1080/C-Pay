@@ -14,7 +14,8 @@ import * as MediaLibrary from 'expo-media-library';
 import { Ionicons } from '@expo/vector-icons';
 import { getMerchantProfile } from '../services/merchant';
 import { MONEY_UNIT_LABEL, convertINRtoAsset, formatMoneyAmount } from '../utils/currency';
-import { generatePaymentQRWithId } from '../utils/qrCode';
+import { generateSignedQRPayload } from '../utils/qrCode';
+import { supabase } from '../services/supabase';
 import { COLORS, SPACING, TYPOGRAPHY, BORDER_RADIUS } from '../constants/theme';
 import { Screen, Header, AmountInput, Button, MerchantQRCard, MerchantQRActions } from '../components';
 import { AlertManager } from '../utils/alert';
@@ -98,11 +99,16 @@ export const MerchantQRGeneratorScreen: React.FC<MerchantQRGeneratorScreenProps>
         return;
       }
 
-      const qrData = generatePaymentQRWithId(
+      // Obtain current session token so the relayer can sign the QR payload.
+      const { data: sessionData } = await supabase.auth.getSession();
+      const bearerToken = sessionData.session?.access_token ?? '';
+
+      const qrData = await generateSignedQRPayload(
         resolvedMerchantId,
         assetAmount ? assetAmount.toFixed(2) : '0',
         businessName,
         walletAddress,
+        bearerToken,
         ''
       );
 

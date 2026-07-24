@@ -80,6 +80,8 @@ app.get('/', (_req, res) => {
       'POST /payments/intents/prepare',
       'POST /payments/intents/submit',
       'POST /payments/submit',
+      'POST /qr/issue',
+      'POST /qr/verify',
       'POST /add-money',
       'GET /tx/:hash',
     ],
@@ -121,6 +123,7 @@ app.get('/health', async (_req, res) => {
     cpayContractId: config.cpayContractId,
     tokenContractId: config.tokenContractId,
     sorobanRpcUrl: config.sorobanRpcUrl,
+    qrSigningConfigured: Boolean(config.qrSigningSecret),
     lowXlm,
     lowAsset,
     timestamp: new Date().toISOString(),
@@ -436,6 +439,145 @@ app.post('/payments/submit', requireAuthenticatedUser, async (req, res) => {
   res.json(response);
 });
 
+// ---------------------------------------------------------------------------
+// QR signing endpoints
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /qr/issue
+ *
+ * Issue a signed, versioned, tamper-evident v3 QR payment request.
+ *
+ * Body:
+ *   merchantId       string  – C-Pay merchant ID
+ *   merchantAddress  string  – Stellar wallet address (G…)
+ *   amount           string  – asset amount, "0" for variable-amount
+ *   merchantName     string  – display name embedded in QR
+ *   note             string? – optional payment note
+ *   ttlSeconds       number? – validity window in seconds (default 86400, max 604800)
+ *
+ * Response: the full v3 JSON payload including `sig`.
+ * The payload can be serialised directly as the QR string.
+ */
+app.post('/qr/issue', requireAuthenticatedUser, (req, res) => {
+  if (!config.qrSigningSecret) {
+    return res.status(503).json({
+      error: 'QR signing is not configured on this relayer. Set QR_SIGNING_SECRET.',
+      code: 'QR_SIGNING_NOT_CONFIGURED',
+    });
+  }
+
+  const merchantId = normalizeMerchantId(req.body.merchantId);
+  const merchantAddress = assertAccountId(req.body.merchantAddress, 'merchantAddress');
+  const merchantName = normalizeOptionalString(req.body.merchantName);
+  if (!merchantName) {
+    const err = new Error('merchantName is required');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // amount: "0" means variable, otherwise validate as a positive amount string
+  const rawAmount = normalizeOptionalString(req.body.amount);
+  let amount = '0';
+  if (rawAmount && rawAmount !== '0') {
+    amount = normalizeAmount(rawAmount, config.maxPaymentAmount);
+  }
+
+  const note = normalizeOptionalString(req.body.note).slice(0, 160);
+  const rawTtl = Number(req.body.ttlSeconds) || 86400;
+  const ttlSeconds = Math.min(Math.max(rawTtl, 30), 604800); // 30 s – 7 days
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const requestId = crypto.randomBytes(16).toString('hex');
+  const nonce = crypto.randomBytes(16).toString('hex');
+
+  const payload = {
+    type: 'cryptopay',
+    version: 3,
+    requestId,
+    nonce,
+    network: `stellar-${config.networkName}`,
+    merchantId,
+    merchant: merchantAddress,
+    assetCode: config.assetCode,
+    assetIssuer: config.assetIssuer,
+    amount,
+    name: merchantName,
+    ...(note ? { note } : {}),
+    issuedAt: nowSeconds,
+    expiresAt: nowSeconds + ttlSeconds,
+  };
+
+  const sig = signQRPayload(payload);
+  res.json({ ...payload, sig });
+});
+
+/**
+ * POST /qr/verify
+ *
+ * Verify a v3 QR payment request payload.
+ *
+ * Body: the full v3 JSON payload including `sig`.
+ *
+ * Responses:
+ *   200 { valid: true, payload }                            – signature OK, not expired
+ *   400 { valid: false, error, code: 'QR_INVALID' }        – missing fields / bad structure
+ *   401 { valid: false, error, code: 'QR_TAMPERED' }       – HMAC mismatch
+ *   410 { valid: false, error, code: 'QR_EXPIRED' }        – past expiresAt
+ */
+app.post('/qr/verify', (req, res) => {
+  if (!config.qrSigningSecret) {
+    return res.status(503).json({
+      error: 'QR signing is not configured on this relayer.',
+      code: 'QR_SIGNING_NOT_CONFIGURED',
+    });
+  }
+
+  const body = req.body || {};
+
+  // Structural check
+  const required = ['requestId', 'nonce', 'network', 'merchantId', 'merchant',
+    'assetCode', 'assetIssuer', 'amount', 'name', 'issuedAt', 'expiresAt', 'sig'];
+  for (const field of required) {
+    if (body[field] === undefined || body[field] === null) {
+      return res.status(400).json({
+        valid: false,
+        error: `Missing required field: ${field}`,
+        code: 'QR_INVALID',
+      });
+    }
+  }
+
+  if (body.version !== 3 || body.type !== 'cryptopay') {
+    return res.status(400).json({ valid: false, error: 'Not a v3 C-Pay QR payload', code: 'QR_INVALID' });
+  }
+
+  // Expiry check (before signature so users get a clear message)
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (body.expiresAt <= nowSeconds) {
+    return res.status(410).json({ valid: false, error: 'QR code has expired', code: 'QR_EXPIRED' });
+  }
+
+  // Signature check
+  const { sig, ...unsigned } = body;
+  const expectedSig = signQRPayload(unsigned);
+  if (!timingSafeEqual(sig, expectedSig)) {
+    return res.status(401).json({ valid: false, error: 'QR signature is invalid', code: 'QR_TAMPERED' });
+  }
+
+  // Network check
+  if (body.network !== `stellar-${config.networkName}`) {
+    return res.status(400).json({ valid: false, error: 'QR is for a different network', code: 'QR_INVALID' });
+  }
+
+  // Asset check
+  if (body.assetCode !== config.assetCode || body.assetIssuer !== config.assetIssuer) {
+    return res.status(400).json({ valid: false, error: 'QR uses an unsupported asset', code: 'QR_INVALID' });
+  }
+
+  res.json({ valid: true, payload: body });
+});
+
 app.post('/add-money', requireAuthenticatedUser, async (req, res) => {
   if (!config.addMoneyEnabled) {
     return res.status(403).json({
@@ -662,6 +804,9 @@ function loadConfig() {
     contractAdminSecret,
     contractFlowEnabled,
     contractIntentTtlSeconds: Number(process.env.CONTRACT_INTENT_TTL_SECONDS || 600),
+    // QR signing – optional but recommended for production
+    qrSigningSecret: process.env.QR_SIGNING_SECRET || '',
+    qrDefaultTtlSeconds: Number(process.env.QR_DEFAULT_TTL_SECONDS || 86400),
   };
 }
 
@@ -672,6 +817,49 @@ function readBooleanEnv(name, defaultValue) {
   }
 
   return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
+}
+
+/**
+ * Sign a v3 QR payload using HMAC-SHA256.
+ *
+ * The signature is over the canonical JSON representation of all fields
+ * except `sig` itself.  This determin istic order prevents signature
+ * mismatches from field reordering.
+ */
+function signQRPayload(unsignedPayload) {
+  // Build the canonical payload with fields in sorted order, excluding `sig`.
+  const canonical = {
+    type: unsignedPayload.type,
+    version: unsignedPayload.version,
+    requestId: unsignedPayload.requestId,
+    nonce: unsignedPayload.nonce,
+    network: unsignedPayload.network,
+    merchantId: unsignedPayload.merchantId,
+    merchant: unsignedPayload.merchant,
+    assetCode: unsignedPayload.assetCode,
+    assetIssuer: unsignedPayload.assetIssuer,
+    amount: unsignedPayload.amount,
+    name: unsignedPayload.name,
+    ...(unsignedPayload.note ? { note: unsignedPayload.note } : {}),
+    issuedAt: unsignedPayload.issuedAt,
+    expiresAt: unsignedPayload.expiresAt,
+  };
+
+  const canonicalString = JSON.stringify(canonical);
+  const hmac = crypto.createHmac('sha256', config.qrSigningSecret);
+  hmac.update(canonicalString);
+  return hmac.digest('hex');
+}
+
+/**
+ * Timing-safe comparison of two hex strings.
+ * Prevents timing attacks on signature verification.
+ */
+function timingSafeEqual(a, b) {
+  const aBuf = Buffer.from(a, 'hex');
+  const bBuf = Buffer.from(b, 'hex');
+  if (aBuf.length !== bBuf.length) return false;
+  return crypto.timingSafeEqual(aBuf, bBuf);
 }
 
 function requireEnv(name) {
