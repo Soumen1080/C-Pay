@@ -153,7 +153,7 @@ app.get('/account/:accountId/balance', async (req, res) => {
   });
 });
 
-app.post('/accounts/prepare', requireAuthenticatedUser, async (req, res) => {
+app.post('/accounts/prepare', requireAuthenticatedUser, requireWalletOwnership('accountId'), async (req, res) => {
   const accountId = assertAccountId(req.body.accountId, 'accountId');
   const status = await getAccountStatus(accountId);
 
@@ -231,7 +231,7 @@ app.get('/contract/config', async (_req, res) => {
   });
 });
 
-app.post('/contract/merchants/register', requireAuthenticatedUser, async (req, res) => {
+app.post('/contract/merchants/register', requireAuthenticatedUser, requireMerchantOwnership('walletAddress'), async (req, res) => {
   assertContractFlowEnabled();
   assertContractAdminConfigured();
 
@@ -247,7 +247,7 @@ app.post('/contract/merchants/register', requireAuthenticatedUser, async (req, r
   });
 });
 
-app.post('/payments/intents/prepare', requireAuthenticatedUser, async (req, res) => {
+app.post('/payments/intents/prepare', requireAuthenticatedUser, requireWalletOwnership('payer'), async (req, res) => {
   assertContractFlowEnabled();
 
   const payer = assertAccountId(req.body.payer, 'payer');
@@ -436,7 +436,7 @@ app.post('/payments/submit', requireAuthenticatedUser, async (req, res) => {
   res.json(response);
 });
 
-app.post('/add-money', requireAuthenticatedUser, async (req, res) => {
+app.post('/add-money', requireAuthenticatedUser, requireWalletOwnership('accountId'), async (req, res) => {
   if (!config.addMoneyEnabled) {
     return res.status(403).json({
       error: 'Add Money is disabled for this network',
@@ -577,6 +577,8 @@ const relayerHttpServer = app.listen(PORT, '0.0.0.0', () => {
 });
 relayerHttpServer.ref();
 
+module.exports = { app, server: relayerHttpServer };
+
 function loadConfig() {
   const networkName = (process.env.STELLAR_NETWORK || 'testnet').toLowerCase();
   const network = NETWORKS[networkName] || NETWORKS.testnet;
@@ -709,6 +711,137 @@ async function requireAuthenticatedUser(req, res, next) {
       code: 'AUTH_REQUIRED',
     });
   }
+}
+
+/**
+ * Resolve the wallet address(es) that belong to an authenticated Supabase user.
+ * Returns an array of wallet_address strings from the users table.
+ * Returns null when persistence is not configured (ownership check is skipped).
+ */
+async function resolveUserWallets(authUid) {
+  if (!isSupabasePersistenceEnabled()) {
+    return null;
+  }
+
+  try {
+    const query = new URLSearchParams({
+      select: 'wallet_address',
+      auth_user_id: `eq.${authUid}`,
+    });
+    const rows = await supabaseRestRequest(`users?${query.toString()}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (!Array.isArray(rows)) {
+      return null;
+    }
+    return rows.map(r => r.wallet_address).filter(Boolean);
+  } catch (error) {
+    console.warn('Wallet ownership lookup failed:', error.message);
+    return null;
+  }
+}
+
+/**
+ * Build a middleware that verifies the requesting user owns the wallet
+ * identified by `walletField` in req.body.
+ *
+ * When auth is disabled or Supabase persistence is not configured the check
+ * is skipped so local development continues to work without a Supabase project.
+ *
+ * @param {string} walletField - The req.body key that holds the wallet address.
+ */
+function requireWalletOwnership(walletField) {
+  return async function (req, res, next) {
+    if (!config.authRequired) {
+      return next();
+    }
+
+    const authUid = req.auth && req.auth.sub;
+    if (!authUid) {
+      return res.status(401).json({
+        error: 'Authentication required',
+        code: 'AUTH_REQUIRED',
+      });
+    }
+
+    const requestedWallet = req.body && req.body[walletField];
+    if (!requestedWallet) {
+      return next();
+    }
+
+    const ownedWallets = await resolveUserWallets(authUid);
+
+    // When Supabase persistence is not configured, skip the ownership check.
+    if (ownedWallets === null) {
+      return next();
+    }
+
+    if (!ownedWallets.includes(requestedWallet)) {
+      return res.status(403).json({
+        error: 'You are not authorized to perform actions for this wallet',
+        code: 'WALLET_OWNERSHIP_DENIED',
+      });
+    }
+
+    return next();
+  };
+}
+
+/**
+ * Build a middleware that verifies the requesting user owns the merchant
+ * identified by `merchantWalletField` in req.body, by checking the merchants
+ * table for a row matching both auth_user_id and wallet_address.
+ *
+ * @param {string} merchantWalletField - The req.body key that holds the merchant wallet address.
+ */
+function requireMerchantOwnership(merchantWalletField) {
+  return async function (req, res, next) {
+    if (!config.authRequired) {
+      return next();
+    }
+
+    const authUid = req.auth && req.auth.sub;
+    if (!authUid) {
+      return res.status(401).json({
+        error: 'Authentication required',
+        code: 'AUTH_REQUIRED',
+      });
+    }
+
+    const requestedWallet = req.body && req.body[merchantWalletField];
+    if (!requestedWallet) {
+      return next();
+    }
+
+    if (!isSupabasePersistenceEnabled()) {
+      return next();
+    }
+
+    try {
+      const query = new URLSearchParams({
+        select: 'wallet_address',
+        auth_user_id: `eq.${authUid}`,
+        wallet_address: `eq.${requestedWallet}`,
+        limit: '1',
+      });
+      const rows = await supabaseRestRequest(`merchants?${query.toString()}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return res.status(403).json({
+          error: 'You are not authorized to register a merchant for this wallet',
+          code: 'MERCHANT_OWNERSHIP_DENIED',
+        });
+      }
+    } catch (error) {
+      console.warn('Merchant ownership lookup failed, skipping check:', error.message);
+    }
+
+    return next();
+  };
 }
 
 async function verifySupabaseJwt(authorizationHeader) {
