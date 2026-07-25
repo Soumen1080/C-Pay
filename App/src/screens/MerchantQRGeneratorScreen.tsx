@@ -14,7 +14,8 @@ import * as MediaLibrary from 'expo-media-library';
 import { Ionicons } from '@expo/vector-icons';
 import { getMerchantProfile } from '../services/merchant';
 import { MONEY_UNIT_LABEL, convertINRtoAsset, formatMoneyAmount } from '../utils/currency';
-import { generatePaymentQRWithId } from '../utils/qrCode';
+import { generateSignedQRPayload } from '../utils/qrCode';
+import { supabase } from '../services/supabase';
 import { COLORS, SPACING, TYPOGRAPHY, BORDER_RADIUS } from '../constants/theme';
 import { Screen, Header, AmountInput, Button, MerchantQRCard, MerchantQRActions } from '../components';
 import { AlertManager } from '../utils/alert';
@@ -50,6 +51,19 @@ export const MerchantQRGeneratorScreen: React.FC<MerchantQRGeneratorScreenProps>
       if (walletAddress) {
         const profile = await getMerchantProfile(walletAddress);
         if (profile) {
+          // Gate: unapproved merchants cannot generate QR codes
+          const status = profile.verification_status || 'pending';
+          if (status !== 'approved') {
+            AlertManager.alert(
+              'Not Yet Approved',
+              status === 'rejected'
+                ? 'Your merchant account was not approved. QR generation is disabled. Please contact support.'
+                : 'Your merchant account is still under review. QR generation will be available once approved.',
+              [{ text: 'OK', onPress: () => navigation.goBack() }]
+            );
+            setInitialLoading(false);
+            return;
+          }
           setMerchantId(profile.id || null);
           setBusinessName(profile.business_name);
           if (profile.logo_url && profile.logo_url !== 'default-merchant-logo') {
@@ -98,11 +112,16 @@ export const MerchantQRGeneratorScreen: React.FC<MerchantQRGeneratorScreenProps>
         return;
       }
 
-      const qrData = generatePaymentQRWithId(
+      // Obtain current session token so the relayer can sign the QR payload.
+      const { data: sessionData } = await supabase.auth.getSession();
+      const bearerToken = sessionData.session?.access_token ?? '';
+
+      const qrData = await generateSignedQRPayload(
         resolvedMerchantId,
         assetAmount ? assetAmount.toFixed(2) : '0',
         businessName,
         walletAddress,
+        bearerToken,
         ''
       );
 

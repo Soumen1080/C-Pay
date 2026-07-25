@@ -11,7 +11,16 @@ import { Camera, CameraView } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { parsePaymentQR, validatePaymentQR } from '../utils/qrCode';
+import { supabase } from '../services/supabase';
+import {
+  parseAnyPaymentQR,
+  validatePaymentQR,
+  validatePaymentQRV3,
+  verifyQRPayloadWithRelayer,
+  PaymentQRData,
+  PaymentQRDataV3,
+  QRVerificationStatus,
+} from '../utils/qrCode';
 import { isValidAccountId } from '../services/blockchain';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
 import { AlertManager } from '../utils/alert';
@@ -21,12 +30,68 @@ interface ScanScreenProps {
   route: any;
 }
 
+// ---------------------------------------------------------------------------
+// Verification badge component
+// ---------------------------------------------------------------------------
+
+interface VerificationBadgeProps {
+  status: QRVerificationStatus | null;
+  reason?: string;
+}
+
+const VerificationBadge: React.FC<VerificationBadgeProps> = ({ status, reason }) => {
+  if (status === null) return null;
+
+  const configs: Record<QRVerificationStatus, { icon: string; label: string; bg: string; text: string }> = {
+    verified: {
+      icon: 'shield-checkmark',
+      label: 'Verified merchant',
+      bg: 'rgba(5,150,105,0.9)',   // success green
+      text: '#FFFFFF',
+    },
+    unverified: {
+      icon: 'shield-outline',
+      label: 'Unverified (legacy QR)',
+      bg: 'rgba(217,119,6,0.9)',   // warning amber
+      text: '#FFFFFF',
+    },
+    expired: {
+      icon: 'time-outline',
+      label: 'QR code expired',
+      bg: 'rgba(220,38,38,0.9)',   // error red
+      text: '#FFFFFF',
+    },
+    invalid: {
+      icon: 'close-circle',
+      label: reason || 'Invalid QR',
+      bg: 'rgba(220,38,38,0.9)',
+      text: '#FFFFFF',
+    },
+  };
+
+  const { icon, label, bg, text } = configs[status];
+
+  return (
+    <View style={[styles.verificationBadge, { backgroundColor: bg }]}>
+      <Ionicons name={icon as any} size={16} color={text} />
+      <Text style={[styles.verificationBadgeText, { color: text }]}>{label}</Text>
+    </View>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Main screen
+// ---------------------------------------------------------------------------
+
 export const ScanScreen: React.FC<ScanScreenProps> = ({ navigation, route }) => {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [scanned, setScanned] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [verificationStatus, setVerificationStatus] = useState<QRVerificationStatus | null>(null);
+  const [verificationReason, setVerificationReason] = useState<string | undefined>(undefined);
   const scannerSize = Math.min(width * 0.7, height * 0.42, 320);
   const headerTopPadding = Math.max(insets.top + SPACING.md, SPACING.xl);
   const footerBottomPadding = Math.max(insets.bottom + SPACING.md, SPACING.xl);
@@ -36,17 +101,31 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ navigation, route }) => 
   }, []);
 
   const checkCameraPermission = async () => {
-    // First check if permission is already granted
     const { status: existingStatus } = await Camera.getCameraPermissionsAsync();
-    
     if (existingStatus === 'granted') {
       setHasPermission(true);
       return;
     }
-    
-    // Only request if not already granted
     const { status } = await Camera.requestCameraPermissionsAsync();
     setHasPermission(status === 'granted');
+  };
+
+  // Get the current Supabase session token for relayer verification calls.
+  const getBearerToken = async (): Promise<string | undefined> => {
+    try {
+      const { data } = await supabase.auth.getSession();
+      return data.session?.access_token;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const resetScan = () => {
+    setScanned(false);
+    setLoading(false);
+    setVerifying(false);
+    setVerificationStatus(null);
+    setVerificationReason(undefined);
   };
 
   const handleBarCodeScanned = async ({ type, data }: { type: string; data: string }) => {
@@ -54,58 +133,133 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ navigation, route }) => 
     setLoading(true);
 
     try {
+      // -----------------------------------------------------------------------
+      // 1. Bare Stellar address (no JSON)
+      // -----------------------------------------------------------------------
       if (isValidAccountId(data.trim())) {
         setLoading(false);
-        
-        navigation.replace('SendMoney', { 
+        navigation.replace('SendMoney', {
           recipientAddress: data.trim(),
           recipientName: undefined,
           isMerchantPayment: false,
           isFromQR: true,
-          hideBalance: route?.params?.returnTo !== 'SendMoney'
+          hideBalance: route?.params?.returnTo !== 'SendMoney',
         });
         return;
       }
 
-      // Try to parse as payment QR code (JSON format with name/amount/merchant details)
-      const paymentData = parsePaymentQR(data);
+      // -----------------------------------------------------------------------
+      // 2. Parse JSON – accepts v2 and v3
+      // -----------------------------------------------------------------------
+      const parsed = parseAnyPaymentQR(data);
 
-      if (!paymentData) {
+      if (!parsed) {
         AlertManager.alert(
           'Invalid QR Code',
-          'Please scan a valid Stellar account QR code or payment request.',
-          [{ text: 'Scan Again', onPress: () => { setScanned(false); setLoading(false); } }]
+          'Please scan a valid Stellar account QR code or C-Pay payment request.',
+          [{ text: 'Scan Again', onPress: resetScan }]
         );
         return;
       }
 
-      // Validate payment data
-      const validation = validatePaymentQR(paymentData);
-      if (!validation.valid) {
-        AlertManager.alert('Invalid Payment', validation.error || 'Invalid payment data', [
-          { text: 'Scan Again', onPress: () => { setScanned(false); setLoading(false); } },
+      // -----------------------------------------------------------------------
+      // 3. Version-specific structural validation
+      // -----------------------------------------------------------------------
+      if (parsed.version === 3) {
+        const v3 = parsed as PaymentQRDataV3;
+        const structCheck = validatePaymentQRV3(v3);
+        if (!structCheck.valid) {
+          AlertManager.alert('Invalid Payment', structCheck.error || 'Invalid QR data', [
+            { text: 'Scan Again', onPress: resetScan },
+          ]);
+          return;
+        }
+
+        // -----------------------------------------------------------------------
+        // 4. Relayer signature verification for v3
+        // -----------------------------------------------------------------------
+        setLoading(false);
+        setVerifying(true);
+
+        const token = await getBearerToken();
+        const verificationResult = await verifyQRPayloadWithRelayer(v3, token);
+
+        setVerifying(false);
+        setVerificationStatus(verificationResult.status);
+        setVerificationReason(verificationResult.reason);
+
+        if (verificationResult.status === 'expired') {
+          AlertManager.alert(
+            'QR Code Expired',
+            'This QR code has expired. Ask the merchant to generate a new one.',
+            [{ text: 'Scan Again', onPress: resetScan }]
+          );
+          return;
+        }
+
+        if (verificationResult.status === 'invalid') {
+          AlertManager.alert(
+            'Invalid QR Code',
+            verificationResult.reason || 'This QR code could not be verified. Do not proceed.',
+            [{ text: 'Scan Again', onPress: resetScan }]
+          );
+          return;
+        }
+
+        // verified or unverified (relayer unreachable) – proceed with a brief pause
+        // so the user can see the verification badge
+        await new Promise(r => setTimeout(r, 800));
+
+        navigation.replace('SendMoney', {
+          recipientAddress: v3.merchant,
+          amount: v3.amount && v3.amount !== '0' ? v3.amount : undefined,
+          recipientName: v3.name,
+          note: v3.note,
+          merchantId: v3.merchantId,
+          isMerchantPayment: true,
+          isFromQR: true,
+          qrVerified: verificationResult.status === 'verified',
+          hideBalance: route?.params?.returnTo !== 'SendMoney',
+        });
+        return;
+      }
+
+      // -----------------------------------------------------------------------
+      // 5. v2 legacy path – structural check only, show deprecation notice
+      // -----------------------------------------------------------------------
+      const v2 = parsed as PaymentQRData;
+      const v2Check = validatePaymentQR(v2);
+      if (!v2Check.valid) {
+        AlertManager.alert('Invalid Payment', v2Check.error || 'Invalid payment data', [
+          { text: 'Scan Again', onPress: resetScan },
         ]);
         return;
       }
 
       setLoading(false);
+      setVerificationStatus('unverified');
+      setVerificationReason('Legacy QR – not tamper-evident');
 
-      // Replace current screen to avoid back button going to scan
-      navigation.replace('SendMoney', { 
-        recipientAddress: paymentData.merchant,
-        amount: paymentData.amount && paymentData.amount !== '0' ? paymentData.amount : undefined,
-        recipientName: paymentData.name,
-        note: paymentData.note,
-        merchantId: paymentData.merchantId, // Pass merchant ID for merchant payments
-        isMerchantPayment: !!paymentData.merchantId, // Flag to indicate merchant payment
-        isFromQR: true, // Flag to indicate data came from QR scan
-        hideBalance: route?.params?.returnTo !== 'SendMoney'
+      // Show the badge briefly, then navigate
+      await new Promise(r => setTimeout(r, 600));
+
+      navigation.replace('SendMoney', {
+        recipientAddress: v2.merchant,
+        amount: v2.amount && v2.amount !== '0' ? v2.amount : undefined,
+        recipientName: v2.name,
+        note: v2.note,
+        merchantId: v2.merchantId,
+        isMerchantPayment: !!v2.merchantId,
+        isFromQR: true,
+        qrVerified: false,
+        hideBalance: route?.params?.returnTo !== 'SendMoney',
       });
     } catch (error) {
       console.error('Error processing QR code:', error);
       setLoading(false);
+      setVerifying(false);
       AlertManager.alert('Error', 'Failed to process QR code. Please try again.', [
-        { text: 'Scan Again', onPress: () => setScanned(false) },
+        { text: 'Scan Again', onPress: resetScan },
       ]);
     }
   };
@@ -130,7 +284,7 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ navigation, route }) => 
           AlertManager.alert(
             'No QR Code Found',
             'Please choose a clear image that contains a C-Pay QR code.',
-            [{ text: 'Try Again', onPress: () => setScanned(false) }]
+            [{ text: 'Try Again', onPress: resetScan }]
           );
           return;
         }
@@ -144,7 +298,7 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ navigation, route }) => 
       console.error('Error picking image:', error);
       setLoading(false);
       AlertManager.alert('Error', 'Failed to scan QR code from this image.', [
-        { text: 'Try Again', onPress: () => setScanned(false) },
+        { text: 'Try Again', onPress: resetScan },
       ]);
     }
   };
@@ -175,45 +329,58 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ navigation, route }) => 
     );
   }
 
+  const footerInstruction = verifying
+    ? 'Verifying merchant...'
+    : scanned
+    ? 'Processing...'
+    : 'Align QR code within the frame';
+
   return (
     <View style={styles.container}>
       <CameraView
         style={styles.camera}
-        barcodeScannerSettings={{
-          barcodeTypes: ['qr'],
-        }}
+        barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
         onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
       />
-      
-      {/* Header - Positioned absolutely over camera */}
+
+      {/* Header */}
       <View style={[styles.header, { paddingTop: headerTopPadding }]}>
         <Text style={styles.headerText}>Scan QR Code to Pay</Text>
       </View>
 
-      {/* Scanner Overlay - Positioned absolutely over camera */}
+      {/* Scanner frame overlay */}
       <View style={styles.overlay}>
         <View style={[styles.scannerContainer, { width: scannerSize, height: scannerSize }]}>
           <View style={styles.scannerFrame}>
-            {/* Corner borders */}
             <View style={[styles.corner, styles.cornerTopLeft]} />
             <View style={[styles.corner, styles.cornerTopRight]} />
             <View style={[styles.corner, styles.cornerBottomLeft]} />
             <View style={[styles.corner, styles.cornerBottomRight]} />
           </View>
         </View>
+
+        {/* Verification badge – sits just below the scanner frame */}
+        {verificationStatus !== null && (
+          <View style={styles.badgeContainer}>
+            <VerificationBadge
+              status={verificationStatus}
+              reason={verificationReason}
+            />
+          </View>
+        )}
       </View>
 
-      {/* Instructions - Positioned absolutely over camera */}
+      {/* Footer */}
       <View style={[styles.footer, { paddingBottom: footerBottomPadding }]}>
-        {loading ? (
+        {loading || verifying ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="small" color={COLORS.primary} />
-            <Text style={styles.instruction}>Loading merchant details...</Text>
+            <Text style={styles.instruction}>
+              {verifying ? 'Verifying merchant...' : 'Loading payment details...'}
+            </Text>
           </View>
         ) : (
-          <Text style={styles.instruction}>
-            {scanned ? 'Processing...' : 'Align QR code within the frame'}
-          </Text>
+          <Text style={styles.instruction}>{footerInstruction}</Text>
         )}
         <View style={styles.buttonRow}>
           <TouchableOpacity style={styles.galleryButton} onPress={handlePickImage}>
@@ -307,6 +474,22 @@ const styles = StyleSheet.create({
     borderBottomWidth: 4,
     borderRightWidth: 4,
     borderBottomRightRadius: BORDER_RADIUS.md,
+  },
+  badgeContainer: {
+    marginTop: SPACING.md,
+    alignItems: 'center',
+  },
+  verificationBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs + 2,
+    borderRadius: BORDER_RADIUS.full,
+  },
+  verificationBadgeText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: '600',
   },
   footer: {
     position: 'absolute',

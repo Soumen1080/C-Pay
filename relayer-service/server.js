@@ -76,10 +76,14 @@ app.get('/', (_req, res) => {
       'POST /accounts/prepare',
       'POST /accounts/submit',
       'POST /contract/merchants/register',
+      'POST /merchants/send-contact-otp',
+      'POST /merchants/verify-contact-otp',
       'GET /contract/config',
       'POST /payments/intents/prepare',
       'POST /payments/intents/submit',
       'POST /payments/submit',
+      'POST /qr/issue',
+      'POST /qr/verify',
       'POST /add-money',
       'GET /tx/:hash',
     ],
@@ -121,6 +125,7 @@ app.get('/health', async (_req, res) => {
     cpayContractId: config.cpayContractId,
     tokenContractId: config.tokenContractId,
     sorobanRpcUrl: config.sorobanRpcUrl,
+    qrSigningConfigured: Boolean(config.qrSigningSecret),
     lowXlm,
     lowAsset,
     timestamp: new Date().toISOString(),
@@ -664,6 +669,9 @@ function loadConfig() {
     contractAdminSecret,
     contractFlowEnabled,
     contractIntentTtlSeconds: Number(process.env.CONTRACT_INTENT_TTL_SECONDS || 600),
+    // QR signing – optional but recommended for production
+    qrSigningSecret: process.env.QR_SIGNING_SECRET || '',
+    qrDefaultTtlSeconds: Number(process.env.QR_DEFAULT_TTL_SECONDS || 86400),
   };
 }
 
@@ -674,6 +682,49 @@ function readBooleanEnv(name, defaultValue) {
   }
 
   return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
+}
+
+/**
+ * Sign a v3 QR payload using HMAC-SHA256.
+ *
+ * The signature is over the canonical JSON representation of all fields
+ * except `sig` itself.  This determin istic order prevents signature
+ * mismatches from field reordering.
+ */
+function signQRPayload(unsignedPayload) {
+  // Build the canonical payload with fields in sorted order, excluding `sig`.
+  const canonical = {
+    type: unsignedPayload.type,
+    version: unsignedPayload.version,
+    requestId: unsignedPayload.requestId,
+    nonce: unsignedPayload.nonce,
+    network: unsignedPayload.network,
+    merchantId: unsignedPayload.merchantId,
+    merchant: unsignedPayload.merchant,
+    assetCode: unsignedPayload.assetCode,
+    assetIssuer: unsignedPayload.assetIssuer,
+    amount: unsignedPayload.amount,
+    name: unsignedPayload.name,
+    ...(unsignedPayload.note ? { note: unsignedPayload.note } : {}),
+    issuedAt: unsignedPayload.issuedAt,
+    expiresAt: unsignedPayload.expiresAt,
+  };
+
+  const canonicalString = JSON.stringify(canonical);
+  const hmac = crypto.createHmac('sha256', config.qrSigningSecret);
+  hmac.update(canonicalString);
+  return hmac.digest('hex');
+}
+
+/**
+ * Timing-safe comparison of two hex strings.
+ * Prevents timing attacks on signature verification.
+ */
+function timingSafeEqual(a, b) {
+  const aBuf = Buffer.from(a, 'hex');
+  const bBuf = Buffer.from(b, 'hex');
+  if (aBuf.length !== bBuf.length) return false;
+  return crypto.timingSafeEqual(aBuf, bBuf);
 }
 
 function requireEnv(name) {
@@ -1103,6 +1154,120 @@ function assertContractAdminConfigured() {
     error.statusCode = 503;
     error.code = 'CONTRACT_ADMIN_NOT_CONFIGURED';
     throw error;
+  }
+}
+
+function assertSupabasePersistenceConfigured(endpoint) {
+  if (!isSupabasePersistenceEnabled()) {
+    const error = new Error(
+      `${endpoint} requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to be configured on the relayer`
+    );
+    error.statusCode = 503;
+    error.code = 'SUPABASE_NOT_CONFIGURED';
+    throw error;
+  }
+}
+
+function assertNonEmptyString(value, label) {
+  if (typeof value !== 'string' || !value.trim()) {
+    const error = new Error(`${label} is required and must be a non-empty string`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return value.trim();
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+/**
+ * Fetch a merchant row only when the given authUserId is the owner.
+ * Returns null when the merchant is not found or the user does not own it.
+ */
+async function fetchMerchantForOwner(merchantId, authUserId) {
+  try {
+    const rows = await supabaseRestRequest(
+      `merchants?id=eq.${encodeURIComponent(merchantId)}&auth_user_id=eq.${encodeURIComponent(authUserId)}&select=id,auth_user_id,verification_status`,
+      { method: 'GET', headers: { 'Accept': 'application/json', Prefer: 'return=representation' } }
+    );
+    return Array.isArray(rows) ? rows[0] || null : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Upsert a merchant_contact_verifications row after an OTP send request.
+ */
+async function upsertMerchantContactVerification({ authUserId, merchantId, contactEmail }) {
+  try {
+    await supabaseRestRequest(
+      'merchant_contact_verifications',
+      {
+        method: 'POST',
+        headers: {
+          Prefer: 'resolution=merge-duplicates,return=minimal',
+          'on-conflict': 'auth_user_id,merchant_id',
+        },
+        body: JSON.stringify({
+          auth_user_id: authUserId,
+          merchant_id: merchantId,
+          contact_email: contactEmail,
+          otp_sent_at: new Date().toISOString(),
+          is_verified: false,
+          verified_at: null,
+        }),
+      }
+    );
+  } catch (err) {
+    // Non-fatal — audit record failure should not block the OTP send response.
+    console.warn('Failed to upsert merchant_contact_verifications:', err.message);
+  }
+}
+
+/**
+ * Mark contact email as verified on the merchants row and the
+ * merchant_contact_verifications audit row.
+ */
+async function updateMerchantContactVerified({ merchantId, contactEmail, authUserId, newVerificationStatus }) {
+  const now = new Date().toISOString();
+
+  const merchantPatch = {
+    contact_email_verified: true,
+    verified_contact_email: contactEmail,
+    updated_at: now,
+  };
+  if (newVerificationStatus) {
+    merchantPatch.verification_status = newVerificationStatus;
+    merchantPatch.submitted_at = now;
+  }
+
+  await supabaseRestRequest(
+    `merchants?id=eq.${encodeURIComponent(merchantId)}&auth_user_id=eq.${encodeURIComponent(authUserId)}`,
+    {
+      method: 'PATCH',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify(merchantPatch),
+    }
+  );
+
+  // Update audit row
+  try {
+    await supabaseRestRequest(
+      `merchant_contact_verifications?merchant_id=eq.${encodeURIComponent(merchantId)}&auth_user_id=eq.${encodeURIComponent(authUserId)}`,
+      {
+        method: 'PATCH',
+        headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify({
+          is_verified: true,
+          verified_at: now,
+          updated_at: now,
+        }),
+      }
+    );
+  } catch (err) {
+    console.warn('Failed to update merchant_contact_verifications after OTP verify:', err.message);
   }
 }
 
