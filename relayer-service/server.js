@@ -158,7 +158,7 @@ app.get('/account/:accountId/balance', async (req, res) => {
   });
 });
 
-app.post('/accounts/prepare', requireAuthenticatedUser, async (req, res) => {
+app.post('/accounts/prepare', requireAuthenticatedUser, requireWalletOwnership('accountId'), async (req, res) => {
   const accountId = assertAccountId(req.body.accountId, 'accountId');
   const status = await getAccountStatus(accountId);
 
@@ -236,7 +236,7 @@ app.get('/contract/config', async (_req, res) => {
   });
 });
 
-app.post('/contract/merchants/register', requireAuthenticatedUser, async (req, res) => {
+app.post('/contract/merchants/register', requireAuthenticatedUser, requireMerchantOwnership('walletAddress'), async (req, res) => {
   assertContractFlowEnabled();
   assertContractAdminConfigured();
 
@@ -252,134 +252,7 @@ app.post('/contract/merchants/register', requireAuthenticatedUser, async (req, r
   });
 });
 
-// ---------------------------------------------------------------------------
-// Merchant contact OTP — verifies business email WITHOUT changing the wallet
-// owner's Supabase auth session. Requires Supabase Admin API credentials on
-// the relayer (SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY).
-// ---------------------------------------------------------------------------
-
-/**
- * POST /merchants/send-contact-otp
- * Body: { merchantId: string, contactEmail: string }
- * Header: Authorization: Bearer <wallet owner session token>
- *
- * Sends an email OTP to contactEmail via the Supabase Admin API.
- * The caller's auth session is never modified.
- */
-app.post('/merchants/send-contact-otp', requireAuthenticatedUser, async (req, res) => {
-  assertSupabasePersistenceConfigured('POST /merchants/send-contact-otp');
-
-  const merchantId = assertNonEmptyString(req.body.merchantId, 'merchantId');
-  const contactEmail = assertNonEmptyString(req.body.contactEmail, 'contactEmail').toLowerCase().trim();
-
-  if (!isValidEmail(contactEmail)) {
-    return res.status(400).json({ error: 'Invalid contactEmail', code: 'INVALID_EMAIL' });
-  }
-
-  // Verify the authenticated user actually owns this merchant record.
-  const authUserId = req.auth?.sub;
-  const merchant = await fetchMerchantForOwner(merchantId, authUserId);
-  if (!merchant) {
-    return res.status(403).json({ error: 'Merchant not found or access denied', code: 'MERCHANT_ACCESS_DENIED' });
-  }
-
-  // Use the Admin API to generate a one-time link / send OTP without opening a
-  // session on this server-side call.
-  const adminRes = await fetch(
-    `${config.supabaseUrl.replace(/\/$/, '')}/auth/v1/otp`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: config.supabaseServiceRoleKey,
-        Authorization: `Bearer ${config.supabaseServiceRoleKey}`,
-      },
-      body: JSON.stringify({
-        email: contactEmail,
-        create_user: false,
-        // data is ignored for OTP but passing options keeps schema happy
-        options: { shouldCreateUser: false },
-      }),
-    }
-  );
-
-  if (!adminRes.ok) {
-    const body = await adminRes.json().catch(() => ({}));
-    const msg = body?.msg || body?.message || body?.error_description || 'Failed to send OTP';
-    return res.status(502).json({ error: msg, code: 'OTP_SEND_FAILED' });
-  }
-
-  // Record that an OTP was requested so we can audit later.
-  await upsertMerchantContactVerification({
-    authUserId,
-    merchantId,
-    contactEmail,
-  });
-
-  return res.json({ sent: true, contactEmail });
-});
-
-/**
- * POST /merchants/verify-contact-otp
- * Body: { merchantId: string, contactEmail: string, token: string }
- * Header: Authorization: Bearer <wallet owner session token>
- *
- * Verifies the OTP server-side via the Supabase Admin API.
- * On success: marks merchants.contact_email_verified = true,
- *             merchants.verified_contact_email = contactEmail.
- */
-app.post('/merchants/verify-contact-otp', requireAuthenticatedUser, async (req, res) => {
-  assertSupabasePersistenceConfigured('POST /merchants/verify-contact-otp');
-
-  const merchantId = assertNonEmptyString(req.body.merchantId, 'merchantId');
-  const contactEmail = assertNonEmptyString(req.body.contactEmail, 'contactEmail').toLowerCase().trim();
-  const token = assertNonEmptyString(req.body.token, 'token');
-
-  if (!isValidEmail(contactEmail)) {
-    return res.status(400).json({ error: 'Invalid contactEmail', code: 'INVALID_EMAIL' });
-  }
-
-  const authUserId = req.auth?.sub;
-  const merchant = await fetchMerchantForOwner(merchantId, authUserId);
-  if (!merchant) {
-    return res.status(403).json({ error: 'Merchant not found or access denied', code: 'MERCHANT_ACCESS_DENIED' });
-  }
-
-  // Verify OTP via the Supabase Admin API. This does NOT create a new session.
-  const verifyRes = await fetch(
-    `${config.supabaseUrl.replace(/\/$/, '')}/auth/v1/verify`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: config.supabaseServiceRoleKey,
-        Authorization: `Bearer ${config.supabaseServiceRoleKey}`,
-      },
-      body: JSON.stringify({ email: contactEmail, token, type: 'email' }),
-    }
-  );
-
-  if (!verifyRes.ok) {
-    const body = await verifyRes.json().catch(() => ({}));
-    const msg = body?.msg || body?.message || body?.error_description || 'Invalid or expired OTP code';
-    return res.status(400).json({ error: msg, code: 'OTP_INVALID' });
-  }
-
-  // Mark the merchant contact as verified and (in pilot mode) auto-approve.
-  const isPilotMode = readBooleanEnv('PILOT_MODE', true);
-  const newStatus = isPilotMode ? 'approved' : undefined; // undefined = leave as-is for non-pilot
-
-  await updateMerchantContactVerified({
-    merchantId,
-    contactEmail,
-    authUserId,
-    newVerificationStatus: newStatus,
-  });
-
-  return res.json({ verified: true, contactEmail, verificationStatus: newStatus || 'pending' });
-});
-
-app.post('/payments/intents/prepare', requireAuthenticatedUser, async (req, res) => {
+app.post('/payments/intents/prepare', requireAuthenticatedUser, requireWalletOwnership('payer'), async (req, res) => {
   assertContractFlowEnabled();
 
   const payer = assertAccountId(req.body.payer, 'payer');
@@ -568,146 +441,7 @@ app.post('/payments/submit', requireAuthenticatedUser, async (req, res) => {
   res.json(response);
 });
 
-// ---------------------------------------------------------------------------
-// QR signing endpoints
-// ---------------------------------------------------------------------------
-
-/**
- * POST /qr/issue
- *
- * Issue a signed, versioned, tamper-evident v3 QR payment request.
- *
- * Body:
- *   merchantId       string  – C-Pay merchant ID
- *   merchantAddress  string  – Stellar wallet address (G…)
- *   amount           string  – asset amount, "0" for variable-amount
- *   merchantName     string  – display name embedded in QR
- *   note             string? – optional payment note
- *   ttlSeconds       number? – validity window in seconds (default 86400, max 604800)
- *
- * Response: the full v3 JSON payload including `sig`.
- * The payload can be serialised directly as the QR string.
- */
-app.post('/qr/issue', requireAuthenticatedUser, (req, res) => {
-  if (!config.qrSigningSecret) {
-    return res.status(503).json({
-      error: 'QR signing is not configured on this relayer. Set QR_SIGNING_SECRET.',
-      code: 'QR_SIGNING_NOT_CONFIGURED',
-    });
-  }
-
-  const merchantId = normalizeMerchantId(req.body.merchantId);
-  const merchantAddress = assertAccountId(req.body.merchantAddress, 'merchantAddress');
-  const merchantName = normalizeOptionalString(req.body.merchantName);
-  if (!merchantName) {
-    const err = new Error('merchantName is required');
-    err.statusCode = 400;
-    throw err;
-  }
-
-  // amount: "0" means variable, otherwise validate as a positive amount string
-  const rawAmount = normalizeOptionalString(req.body.amount);
-  let amount = '0';
-  if (rawAmount && rawAmount !== '0') {
-    amount = normalizeAmount(rawAmount, config.maxPaymentAmount);
-  }
-
-  const note = normalizeOptionalString(req.body.note).slice(0, 160);
-  const rawTtl = Number(req.body.ttlSeconds) || 86400;
-  const ttlSeconds = Math.min(Math.max(rawTtl, 30), 604800); // 30 s – 7 days
-
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  const requestId = crypto.randomBytes(16).toString('hex');
-  const nonce = crypto.randomBytes(16).toString('hex');
-
-  const payload = {
-    type: 'cryptopay',
-    version: 3,
-    requestId,
-    nonce,
-    network: `stellar-${config.networkName}`,
-    merchantId,
-    merchant: merchantAddress,
-    assetCode: config.assetCode,
-    assetIssuer: config.assetIssuer,
-    amount,
-    name: merchantName,
-    ...(note ? { note } : {}),
-    issuedAt: nowSeconds,
-    expiresAt: nowSeconds + ttlSeconds,
-  };
-
-  const sig = signQRPayload(payload);
-  res.json({ ...payload, sig });
-});
-
-/**
- * POST /qr/verify
- *
- * Verify a v3 QR payment request payload.
- *
- * Body: the full v3 JSON payload including `sig`.
- *
- * Responses:
- *   200 { valid: true, payload }                            – signature OK, not expired
- *   400 { valid: false, error, code: 'QR_INVALID' }        – missing fields / bad structure
- *   401 { valid: false, error, code: 'QR_TAMPERED' }       – HMAC mismatch
- *   410 { valid: false, error, code: 'QR_EXPIRED' }        – past expiresAt
- */
-app.post('/qr/verify', (req, res) => {
-  if (!config.qrSigningSecret) {
-    return res.status(503).json({
-      error: 'QR signing is not configured on this relayer.',
-      code: 'QR_SIGNING_NOT_CONFIGURED',
-    });
-  }
-
-  const body = req.body || {};
-
-  // Structural check
-  const required = ['requestId', 'nonce', 'network', 'merchantId', 'merchant',
-    'assetCode', 'assetIssuer', 'amount', 'name', 'issuedAt', 'expiresAt', 'sig'];
-  for (const field of required) {
-    if (body[field] === undefined || body[field] === null) {
-      return res.status(400).json({
-        valid: false,
-        error: `Missing required field: ${field}`,
-        code: 'QR_INVALID',
-      });
-    }
-  }
-
-  if (body.version !== 3 || body.type !== 'cryptopay') {
-    return res.status(400).json({ valid: false, error: 'Not a v3 C-Pay QR payload', code: 'QR_INVALID' });
-  }
-
-  // Expiry check (before signature so users get a clear message)
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  if (body.expiresAt <= nowSeconds) {
-    return res.status(410).json({ valid: false, error: 'QR code has expired', code: 'QR_EXPIRED' });
-  }
-
-  // Signature check
-  const { sig, ...unsigned } = body;
-  const expectedSig = signQRPayload(unsigned);
-  if (!timingSafeEqual(sig, expectedSig)) {
-    return res.status(401).json({ valid: false, error: 'QR signature is invalid', code: 'QR_TAMPERED' });
-  }
-
-  // Network check
-  if (body.network !== `stellar-${config.networkName}`) {
-    return res.status(400).json({ valid: false, error: 'QR is for a different network', code: 'QR_INVALID' });
-  }
-
-  // Asset check
-  if (body.assetCode !== config.assetCode || body.assetIssuer !== config.assetIssuer) {
-    return res.status(400).json({ valid: false, error: 'QR uses an unsupported asset', code: 'QR_INVALID' });
-  }
-
-  res.json({ valid: true, payload: body });
-});
-
-app.post('/add-money', requireAuthenticatedUser, async (req, res) => {
+app.post('/add-money', requireAuthenticatedUser, requireWalletOwnership('accountId'), async (req, res) => {
   if (!config.addMoneyEnabled) {
     return res.status(403).json({
       error: 'Add Money is disabled for this network',
@@ -847,6 +581,8 @@ const relayerHttpServer = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Distribution: ${distributionKeypair.publicKey()}`);
 });
 relayerHttpServer.ref();
+
+module.exports = { app, server: relayerHttpServer };
 
 function loadConfig() {
   const networkName = (process.env.STELLAR_NETWORK || 'testnet').toLowerCase();
@@ -1026,6 +762,137 @@ async function requireAuthenticatedUser(req, res, next) {
       code: 'AUTH_REQUIRED',
     });
   }
+}
+
+/**
+ * Resolve the wallet address(es) that belong to an authenticated Supabase user.
+ * Returns an array of wallet_address strings from the users table.
+ * Returns null when persistence is not configured (ownership check is skipped).
+ */
+async function resolveUserWallets(authUid) {
+  if (!isSupabasePersistenceEnabled()) {
+    return null;
+  }
+
+  try {
+    const query = new URLSearchParams({
+      select: 'wallet_address',
+      auth_user_id: `eq.${authUid}`,
+    });
+    const rows = await supabaseRestRequest(`users?${query.toString()}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (!Array.isArray(rows)) {
+      return null;
+    }
+    return rows.map(r => r.wallet_address).filter(Boolean);
+  } catch (error) {
+    console.warn('Wallet ownership lookup failed:', error.message);
+    return null;
+  }
+}
+
+/**
+ * Build a middleware that verifies the requesting user owns the wallet
+ * identified by `walletField` in req.body.
+ *
+ * When auth is disabled or Supabase persistence is not configured the check
+ * is skipped so local development continues to work without a Supabase project.
+ *
+ * @param {string} walletField - The req.body key that holds the wallet address.
+ */
+function requireWalletOwnership(walletField) {
+  return async function (req, res, next) {
+    if (!config.authRequired) {
+      return next();
+    }
+
+    const authUid = req.auth && req.auth.sub;
+    if (!authUid) {
+      return res.status(401).json({
+        error: 'Authentication required',
+        code: 'AUTH_REQUIRED',
+      });
+    }
+
+    const requestedWallet = req.body && req.body[walletField];
+    if (!requestedWallet) {
+      return next();
+    }
+
+    const ownedWallets = await resolveUserWallets(authUid);
+
+    // When Supabase persistence is not configured, skip the ownership check.
+    if (ownedWallets === null) {
+      return next();
+    }
+
+    if (!ownedWallets.includes(requestedWallet)) {
+      return res.status(403).json({
+        error: 'You are not authorized to perform actions for this wallet',
+        code: 'WALLET_OWNERSHIP_DENIED',
+      });
+    }
+
+    return next();
+  };
+}
+
+/**
+ * Build a middleware that verifies the requesting user owns the merchant
+ * identified by `merchantWalletField` in req.body, by checking the merchants
+ * table for a row matching both auth_user_id and wallet_address.
+ *
+ * @param {string} merchantWalletField - The req.body key that holds the merchant wallet address.
+ */
+function requireMerchantOwnership(merchantWalletField) {
+  return async function (req, res, next) {
+    if (!config.authRequired) {
+      return next();
+    }
+
+    const authUid = req.auth && req.auth.sub;
+    if (!authUid) {
+      return res.status(401).json({
+        error: 'Authentication required',
+        code: 'AUTH_REQUIRED',
+      });
+    }
+
+    const requestedWallet = req.body && req.body[merchantWalletField];
+    if (!requestedWallet) {
+      return next();
+    }
+
+    if (!isSupabasePersistenceEnabled()) {
+      return next();
+    }
+
+    try {
+      const query = new URLSearchParams({
+        select: 'wallet_address',
+        auth_user_id: `eq.${authUid}`,
+        wallet_address: `eq.${requestedWallet}`,
+        limit: '1',
+      });
+      const rows = await supabaseRestRequest(`merchants?${query.toString()}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return res.status(403).json({
+          error: 'You are not authorized to register a merchant for this wallet',
+          code: 'MERCHANT_OWNERSHIP_DENIED',
+        });
+      }
+    } catch (error) {
+      console.warn('Merchant ownership lookup failed, skipping check:', error.message);
+    }
+
+    return next();
+  };
 }
 
 async function verifySupabaseJwt(authorizationHeader) {
