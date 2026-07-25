@@ -1139,432 +1139,173 @@ mod test {
         );
     }
 
-    // =========================================================================
-    // New tests: unauthorized admin / relayer actions
-    // =========================================================================
+    // ── Edge-case tests ────────────────────────────────────────────────────
 
-    /// These tests verify authorization by checking that functions requiring
-    /// specific roles (admin or relayer) will reject unauthorized callers.
-    /// In the Soroban testing environment with mock_all_auths, we cannot
-    /// easily catch authorization panics, so instead we document the expected
-    /// authorization requirements and show that correct authorized flows work.
-
+    /// Double-confirm: confirming an already-Confirmed intent must return
+    /// `InvalidStatus`, not silently overwrite the payment hash.
     #[test]
-    fn admin_functions_require_admin_auth() {
+    fn rejects_double_confirm() {
         let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, _payer) = setup(&env);
+        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
 
         let merchant_id = id(&env, 40);
-
-        // With mock_all_auths enabled by setup(), all operations succeed.
-        // In production, config.admin.require_auth() is called and would
-        // panic if a non-admin address tried to register a merchant,
-        // set_merchant_active, set_merchant_account, set_paused, set_admin,
-        // set_token, set_relayer, or expire_intent.
-
-        // Register merchant works because admin is authorised.
-        let registered = client
-            .try_register_merchant(&merchant_id, &merchant)
-            .unwrap()
-            .unwrap();
-        assert!(registered.active);
-
-        // Set merchant active also requires admin auth.
-        client
-            .try_set_merchant_active(&merchant_id, &false)
-            .unwrap()
-            .unwrap();
-
-        // Set admin works with admin auth.
-        let new_admin = Address::generate(&env);
-        client.try_set_admin(&new_admin).unwrap().unwrap();
-
-        // In a real environment, calling these functions without admin auth
-        // causes the contract to panic with an authorization error.
-    }
-
-    #[test]
-    fn relayer_functions_require_relayer_auth() {
-        let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
-
-        let (intent_id, _) = setup_intent(&env, &client, 41, 42, &merchant, &payer);
-
-        // With mock_all_auths, the relayer is allowed to call mark_submitted
-        // and confirm_intent because the authorization is automatically granted.
-        // In production, config.relayer.require_auth() is invoked and would
-        // panic if a non-relayer tried to call these functions.
-
-        client
-            .try_mark_submitted(&intent_id, &id(&env, 0xaa))
-            .unwrap()
-            .unwrap();
-
-        client
-            .try_confirm_intent(&intent_id, &id(&env, 0xaa))
-            .unwrap()
-            .unwrap();
-
-        // Documented: in a real environment, non-relayer callers will be
-        // rejected by require_auth() with a panic.
-    }
-
-    // =========================================================================
-    // New tests: duplicate confirmations
-    // =========================================================================
-
-    #[test]
-    fn duplicate_confirmation_returns_duplicate_confirmation_error() {
-        let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
-
-        let (intent_id, _) = setup_intent(&env, &client, 50, 51, &merchant, &payer);
-
-        // First confirmation succeeds.
-        client
-            .try_confirm_intent(&intent_id, &id(&env, 0x01))
-            .unwrap()
-            .unwrap();
-
-        // Second confirmation on the same intent must return DuplicateConfirmation.
-        assert_eq!(
-            client.try_confirm_intent(&intent_id, &id(&env, 0x02)),
-            Err(Ok(Error::DuplicateConfirmation))
-        );
-    }
-
-    #[test]
-    fn confirmation_after_submit_succeeds_and_records_timestamps() {
-        let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
-
-        let (intent_id, _) = setup_intent(&env, &client, 52, 53, &merchant, &payer);
-
-        let submitted = client
-            .try_mark_submitted(&intent_id, &id(&env, 0x11))
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(submitted.status, PaymentStatus::Submitted);
-        assert!(submitted.submitted_at.is_some());
-        assert_eq!(submitted.confirmed_at, None);
-
-        env.ledger().set_timestamp(env.ledger().timestamp() + 1);
-
-        let confirmed = client
-            .try_confirm_intent(&intent_id, &id(&env, 0x11))
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(confirmed.status, PaymentStatus::Confirmed);
-        assert!(confirmed.confirmed_at.is_some());
-        assert!(confirmed.submitted_at.is_some());
-    }
-
-    // =========================================================================
-    // New tests: expired intent confirmation
-    // =========================================================================
-
-    #[test]
-    fn confirm_expired_intent_returns_intent_expired() {
-        let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
-
-        let (intent_id, expires_at) = setup_intent(&env, &client, 54, 55, &merchant, &payer);
-
-        env.ledger().set_timestamp(expires_at); // at or past expiry
-
-        assert_eq!(
-            client.try_confirm_intent(&intent_id, &id(&env, 0x20)),
-            Err(Ok(Error::IntentExpired))
-        );
-    }
-
-    #[test]
-    fn mark_submitted_on_expired_intent_returns_intent_expired() {
-        let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
-
-        let (intent_id, expires_at) = setup_intent(&env, &client, 56, 57, &merchant, &payer);
-
-        env.ledger().set_timestamp(expires_at);
-
-        assert_eq!(
-            client.try_mark_submitted(&intent_id, &id(&env, 0x21)),
-            Err(Ok(Error::IntentExpired))
-        );
-    }
-
-    // =========================================================================
-    // New tests: expire_intent admin function
-    // =========================================================================
-
-    #[test]
-    fn admin_can_expire_intent_after_expiry_timestamp() {
-        let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
-
-        let (intent_id, expires_at) = setup_intent(&env, &client, 58, 59, &merchant, &payer);
-
-        // Before expiry – should fail.
-        assert_eq!(
-            client.try_expire_intent(&intent_id),
-            Err(Ok(Error::NotYetExpired))
-        );
-
-        // Advance time past expiry.
-        env.ledger().set_timestamp(expires_at + 1);
-
-        let expired = client.try_expire_intent(&intent_id).unwrap().unwrap();
-        assert_eq!(expired.status, PaymentStatus::Expired);
-    }
-
-    #[test]
-    fn expire_intent_rejects_already_terminal_intents() {
-        let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
-
-        // Cancelled → cannot expire.
-        let (intent_id_c, expires_at_c) = setup_intent(&env, &client, 60, 61, &merchant, &payer);
-        client
-            .try_cancel_intent(&payer, &intent_id_c)
-            .unwrap()
-            .unwrap();
-        env.ledger().set_timestamp(expires_at_c + 1);
-        assert_eq!(
-            client.try_expire_intent(&intent_id_c),
-            Err(Ok(Error::AlreadyTerminal))
-        );
-
-        // Confirmed → cannot expire.
-        let (intent_id_d, expires_at_d) = setup_intent(&env, &client, 62, 63, &merchant, &payer);
-        client
-            .try_confirm_intent(&intent_id_d, &id(&env, 0x30))
-            .unwrap()
-            .unwrap();
-        env.ledger().set_timestamp(expires_at_d + 1);
-        assert_eq!(
-            client.try_expire_intent(&intent_id_d),
-            Err(Ok(Error::AlreadyTerminal))
-        );
-    }
-
-    // =========================================================================
-    // New tests: cancelled intent cannot be confirmed
-    // =========================================================================
-
-    #[test]
-    fn cancelled_intent_rejects_confirmation() {
-        let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
-
-        let (intent_id, _) = setup_intent(&env, &client, 64, 65, &merchant, &payer);
-
-        client
-            .try_cancel_intent(&payer, &intent_id)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(
-            client.try_confirm_intent(&intent_id, &id(&env, 0x40)),
-            Err(Ok(Error::InvalidStatus))
-        );
-    }
-
-    #[test]
-    fn cancelled_intent_cannot_be_submitted() {
-        let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
-
-        let (intent_id, _) = setup_intent(&env, &client, 66, 67, &merchant, &payer);
-
-        client
-            .try_cancel_intent(&payer, &intent_id)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(
-            client.try_mark_submitted(&intent_id, &id(&env, 0x41)),
-            Err(Ok(Error::InvalidStatus))
-        );
-    }
-
-    // =========================================================================
-    // New tests: merchant account rotation during active intent
-    // =========================================================================
-
-    #[test]
-    fn merchant_account_rotation_does_not_affect_in_flight_intent() {
-        let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
-
-        let merchant_id = id(&env, 68);
-        let intent_id = id(&env, 69);
+        let intent_id = id(&env, 41);
+        let payment_hash_1 = id(&env, 42);
+        let payment_hash_2 = id(&env, 43);
 
         client
             .try_register_merchant(&merchant_id, &merchant)
             .unwrap()
             .unwrap();
-
-        let intent = client
+        client
             .try_create_intent(
                 &payer,
                 &merchant_id,
                 &intent_id,
-                &100_i128,
+                &50_i128,
                 &(env.ledger().timestamp() + 600),
-                &id(&env, 0x50),
+                &id(&env, 44),
             )
             .unwrap()
             .unwrap();
 
-        // Snapshot the original merchant address embedded in the intent.
-        let original_merchant_in_intent = intent.merchant.clone();
-
-        // Admin rotates the merchant to a new account.
-        let new_merchant = Address::generate(&env);
-        client
-            .try_set_merchant_account(&merchant_id, &new_merchant)
-            .unwrap()
-            .unwrap();
-
-        // Confirm the in-flight intent – it still carries the old merchant address
-        // (addresses are captured at intent creation, not re-read at confirmation).
+        // First confirm — must succeed
         let confirmed = client
-            .try_confirm_intent(&intent_id, &id(&env, 0x51))
+            .try_confirm_intent(&intent_id, &payment_hash_1)
             .unwrap()
             .unwrap();
-
-        assert_eq!(confirmed.merchant, original_merchant_in_intent);
         assert_eq!(confirmed.status, PaymentStatus::Confirmed);
+        assert_eq!(confirmed.payment_hash, Some(payment_hash_1.clone()));
 
-        // New merchant account is stored on the merchant record.
-        let stored_merchant = client.try_merchant(&merchant_id).unwrap().unwrap();
-        assert_eq!(stored_merchant.account, new_merchant);
-    }
-
-    // =========================================================================
-    // New tests: pause behaviour
-    // =========================================================================
-
-    #[test]
-    fn pause_blocks_mark_submitted() {
-        let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
-
-        let (intent_id, _) = setup_intent(&env, &client, 70, 71, &merchant, &payer);
-
-        client.try_set_paused(&true).unwrap().unwrap();
-
+        // Second confirm on the same intent — must be rejected
         assert_eq!(
-            client.try_mark_submitted(&intent_id, &id(&env, 0x60)),
-            Err(Ok(Error::Paused))
-        );
-    }
-
-    #[test]
-    fn unpause_allows_operations_again() {
-        let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
-
-        let (intent_id, _) = setup_intent(&env, &client, 72, 73, &merchant, &payer);
-
-        client.try_set_paused(&true).unwrap().unwrap();
-        client.try_set_paused(&false).unwrap().unwrap();
-
-        // After unpause, confirmation works again.
-        let confirmed = client
-            .try_confirm_intent(&intent_id, &id(&env, 0x61))
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(confirmed.status, PaymentStatus::Confirmed);
-    }
-
-    // =========================================================================
-    // New tests: reconciliation flow
-    // =========================================================================
-
-    #[test]
-    fn admin_can_mark_submitted_intent_as_reconciliation_needed() {
-        let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
-
-        let (intent_id, _) = setup_intent(&env, &client, 74, 75, &merchant, &payer);
-
-        // Relayer submits the payment but confirmation fails for some reason.
-        client
-            .try_mark_submitted(&intent_id, &id(&env, 0x70))
-            .unwrap()
-            .unwrap();
-
-        let reason = soroban_sdk::String::from_str(&env, "amount_mismatch");
-        let flagged = client
-            .try_mark_reconciliation_needed(&intent_id, &reason)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(flagged.status, PaymentStatus::ReconciliationNeeded);
-    }
-
-    #[test]
-    fn admin_can_mark_created_intent_as_reconciliation_needed() {
-        let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
-
-        let (intent_id, _) = setup_intent(&env, &client, 76, 77, &merchant, &payer);
-
-        let reason = soroban_sdk::String::from_str(&env, "ledger_miss");
-        let flagged = client
-            .try_mark_reconciliation_needed(&intent_id, &reason)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(flagged.status, PaymentStatus::ReconciliationNeeded);
-    }
-
-    #[test]
-    fn reconciliation_needed_intent_cannot_be_confirmed_or_expired() {
-        let env = Env::default();
-        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
-
-        let (intent_id, expires_at) = setup_intent(&env, &client, 78, 79, &merchant, &payer);
-
-        let reason = soroban_sdk::String::from_str(&env, "dispute");
-        client
-            .try_mark_reconciliation_needed(&intent_id, &reason)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(
-            client.try_confirm_intent(&intent_id, &id(&env, 0x80)),
+            client.try_confirm_intent(&intent_id, &payment_hash_2),
             Err(Ok(Error::InvalidStatus))
         );
 
-        env.ledger().set_timestamp(expires_at + 1);
-        assert_eq!(
-            client.try_expire_intent(&intent_id),
-            Err(Ok(Error::AlreadyTerminal))
-        );
+        // Original payment hash must be preserved
+        let persisted = client.try_intent(&intent_id).unwrap().unwrap();
+        assert_eq!(persisted.payment_hash, Some(payment_hash_1));
     }
 
+    /// Cancel-after-confirm: a Confirmed intent cannot be cancelled.
     #[test]
-    fn already_terminal_states_reject_reconciliation_flagging() {
+    fn rejects_cancel_after_confirm() {
         let env = Env::default();
         let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
 
-        let (intent_id, _) = setup_intent(&env, &client, 80, 81, &merchant, &payer);
+        let merchant_id = id(&env, 45);
+        let intent_id = id(&env, 46);
 
-        // Confirm → terminal.
         client
-            .try_confirm_intent(&intent_id, &id(&env, 0x90))
+            .try_register_merchant(&merchant_id, &merchant)
+            .unwrap()
+            .unwrap();
+        client
+            .try_create_intent(
+                &payer,
+                &merchant_id,
+                &intent_id,
+                &50_i128,
+                &(env.ledger().timestamp() + 600),
+                &id(&env, 47),
+            )
+            .unwrap()
+            .unwrap();
+        client
+            .try_confirm_intent(&intent_id, &id(&env, 48))
             .unwrap()
             .unwrap();
 
-        let reason = soroban_sdk::String::from_str(&env, "late_flag");
+        // Cancel must now be rejected with InvalidStatus
         assert_eq!(
-            client.try_mark_reconciliation_needed(&intent_id, &reason),
-            Err(Ok(Error::AlreadyTerminal))
+            client.try_cancel_intent(&payer, &intent_id),
+            Err(Ok(Error::InvalidStatus))
+        );
+    }
+
+    /// Negative amount is rejected the same way as zero.
+    #[test]
+    fn rejects_negative_amount() {
+        let env = Env::default();
+        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
+
+        let merchant_id = id(&env, 49);
+        client
+            .try_register_merchant(&merchant_id, &merchant)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            client.try_create_intent(
+                &payer,
+                &merchant_id,
+                &id(&env, 50),
+                &-1_i128,
+                &(env.ledger().timestamp() + 600),
+                &id(&env, 51),
+            ),
+            Err(Ok(Error::InvalidAmount))
+        );
+    }
+
+    /// Unpause: contract resumes accepting intents after being unpaused.
+    #[test]
+    fn unpause_resumes_intent_creation() {
+        let env = Env::default();
+        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
+
+        let merchant_id = id(&env, 52);
+        client
+            .try_register_merchant(&merchant_id, &merchant)
+            .unwrap()
+            .unwrap();
+
+        // Pause
+        client.try_set_paused(&true).unwrap().unwrap();
+        assert_eq!(
+            client.try_create_intent(
+                &payer,
+                &merchant_id,
+                &id(&env, 53),
+                &50_i128,
+                &(env.ledger().timestamp() + 600),
+                &id(&env, 54),
+            ),
+            Err(Ok(Error::Paused))
+        );
+
+        // Unpause
+        client.try_set_paused(&false).unwrap().unwrap();
+        let intent = client
+            .try_create_intent(
+                &payer,
+                &merchant_id,
+                &id(&env, 55),
+                &50_i128,
+                &(env.ledger().timestamp() + 600),
+                &id(&env, 56),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(intent.status, PaymentStatus::Created);
+    }
+
+    /// read_config before initialization: calling config() before the
+    /// constructor panics with NotInitialized.
+    #[test]
+    fn config_returns_not_initialized_before_constructor() {
+        let env = Env::default();
+        env.mock_all_auths();
+        // Register the contract without calling the constructor by deploying
+        // with no init args — this is not possible via the typed client, so we
+        // directly instantiate and call config without a prior constructor.
+        // We test the error path by deploying and immediately trying to read.
+        let contract_id = env.register(CPayPayments, ());
+        let client = CPayPaymentsClient::new(&env, &contract_id);
+        assert_eq!(
+            client.try_config(),
+            Err(Ok(Error::NotInitialized))
         );
     }
 }

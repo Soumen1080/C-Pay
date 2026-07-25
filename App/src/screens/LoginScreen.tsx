@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,18 +13,32 @@ import { PINInput } from '../components/PINInput';
 import { Screen } from '../components';
 import {
   cachePinForSession,
+  clearPinAttempts,
   getWalletFromBiometricBackup,
+  getPinAttemptState,
   hasBiometricBackup,
+  isLockedOut,
+  lockoutRemainingMs,
+  MAX_PIN_ATTEMPTS,
+  recordFailedPinAttempt,
   verifyPin,
 } from '../services/wallet';
 import { isBiometricAvailable, getBiometricType } from '../utils/biometric';
-import { COLORS, SPACING, TYPOGRAPHY } from '../constants/theme';
+import { COLORS, SPACING, TYPOGRAPHY, BORDER_RADIUS } from '../constants/theme';
 import { AlertManager } from '../utils/alert';
 
 const FONT_SIZES = TYPOGRAPHY.sizes;
 
 interface LoginScreenProps {
   navigation: any;
+}
+
+/** Format remaining lockout seconds as mm:ss. */
+function formatCountdown(ms: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
@@ -34,35 +48,72 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
   const [showBiometric, setShowBiometric] = useState(false);
   const [biometricType, setBiometricType] = useState('Biometric');
 
+  // Lockout state
+  const [attemptCount, setAttemptCount] = useState(0);
+  const [lockoutMs, setLockoutMs] = useState(0);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const biometricIconName = biometricType.includes('Face') ? 'scan-outline' : 'finger-print-outline';
+  const locked = lockoutMs > 0;
+
+  // ── Load persisted attempt state on mount ──────────────────────────────────
+  useEffect(() => {
+    void (async () => {
+      const state = await getPinAttemptState();
+      setAttemptCount(state.attempts);
+      const remaining = lockoutRemainingMs(state);
+      if (remaining > 0) {
+        setLockoutMs(remaining);
+        startCountdown();
+      }
+    })();
+    checkAndTriggerBiometric();
+  }, []);
+
+  // ── Countdown ticker ───────────────────────────────────────────────────────
+  const startCountdown = useCallback(() => {
+    if (countdownRef.current) return;
+    countdownRef.current = setInterval(async () => {
+      const state = await getPinAttemptState();
+      const remaining = lockoutRemainingMs(state);
+      setLockoutMs(remaining);
+      if (remaining <= 0) {
+        clearInterval(countdownRef.current!);
+        countdownRef.current = null;
+        setLockoutMs(0);
+        setError('');
+      }
+    }, 500);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (countdownRef.current) clearInterval(countdownRef.current);
+    };
+  }, []);
+
+  // ── Biometric ──────────────────────────────────────────────────────────────
+  const checkAndTriggerBiometric = async () => {
+    const biometricEnabled = await AsyncStorage.getItem('biometric_enabled');
+    const available = await isBiometricAvailable();
+    const backupAvailable = await hasBiometricBackup();
+
+    if (biometricEnabled === 'true' && available && backupAvailable) {
+      setShowBiometric(true);
+      const type = await getBiometricType();
+      setBiometricType(type);
+      setTimeout(() => handleBiometricAuth(), 500);
+    }
+  };
 
   const navigateAfterWalletUnlock = async () => {
     const cloudBackupRequired = await AsyncStorage.getItem('cloud_backup_required');
     navigation.replace(cloudBackupRequired === 'true' ? 'CloudBackupSetup' : 'MainTabs');
   };
 
-  useEffect(() => {
-    checkAndTriggerBiometric();
-  }, []);
-
-  const checkAndTriggerBiometric = async () => {
-    const biometricEnabled = await AsyncStorage.getItem('biometric_enabled');
-    const available = await isBiometricAvailable();
-    const backupAvailable = await hasBiometricBackup();
-    
-    if (biometricEnabled === 'true' && available && backupAvailable) {
-      setShowBiometric(true);
-      const type = await getBiometricType();
-      setBiometricType(type);
-      // Auto-trigger biometric on screen load
-      setTimeout(() => handleBiometricAuth(), 500);
-    }
-  };
-
   const handleBiometricAuth = async () => {
     try {
       const available = await isBiometricAvailable();
-
       if (!available) {
         AlertManager.alert('Biometric Not Available', 'Please use your PIN to login');
         return;
@@ -76,41 +127,63 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
       } else {
         AlertManager.alert('Authentication Failed', 'Please use your PIN to unlock this wallet.');
       }
-    } catch (error) {
-      console.error('Biometric auth error:', error);
+    } catch (err) {
+      console.error('Biometric auth error:', err);
       AlertManager.alert('Authentication Failed', 'Please use your PIN to unlock this wallet.');
     }
   };
 
+  // ── PIN entry ──────────────────────────────────────────────────────────────
   const handlePINChange = (newPin: string) => {
-    if (loading) {
-      return;
-    }
-
+    if (loading || locked) return;
     setPin(newPin);
     setError('');
-
-    // Only verify when PIN is complete (6 digits)
     if (newPin.length === 6) {
       void verifyPinAndLogin(newPin);
     }
   };
 
   const verifyPinAndLogin = async (pinToVerify: string) => {
-    if (loading) {
-      return;
-    }
-
+    if (loading || locked) return;
     setLoading(true);
-    
+
     try {
+      // Re-check lockout state right before verifying (prevents race conditions).
+      const currentState = await getPinAttemptState();
+      if (isLockedOut(currentState)) {
+        const remaining = lockoutRemainingMs(currentState);
+        setLockoutMs(remaining);
+        startCountdown();
+        setPin('');
+        setLoading(false);
+        return;
+      }
+
       const isValid = await verifyPin(pinToVerify, { blockMigration: false });
-      
+
       if (isValid) {
+        await clearPinAttempts();
+        setAttemptCount(0);
+        setLockoutMs(0);
         cachePinForSession(pinToVerify);
         await navigateAfterWalletUnlock();
       } else {
-        setError('Incorrect PIN');
+        const nextState = await recordFailedPinAttempt();
+        setAttemptCount(nextState.attempts);
+
+        const remaining = lockoutRemainingMs(nextState);
+        if (remaining > 0) {
+          setLockoutMs(remaining);
+          startCountdown();
+          setError('Too many incorrect attempts. Please wait before trying again.');
+        } else {
+          const attemptsLeft = MAX_PIN_ATTEMPTS - nextState.attempts;
+          if (attemptsLeft > 0) {
+            setError(`Incorrect PIN. ${attemptsLeft} attempt${attemptsLeft === 1 ? '' : 's'} remaining before lockout.`);
+          } else {
+            setError('Incorrect PIN.');
+          }
+        }
         setPin('');
       }
     } catch (err) {
@@ -121,6 +194,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
     }
   };
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <Screen scroll={false}>
       <View style={styles.header}>
@@ -137,19 +211,44 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
         <PINInput
           value={pin}
           onChange={handlePINChange}
-          error={error}
-          autoFocus={!showBiometric}
-          disabled={loading}
+          error={locked ? '' : error}
+          autoFocus={!showBiometric && !locked}
+          disabled={loading || locked}
         />
+
         {loading && (
-          <View style={styles.loadingContainer}>
+          <View style={styles.statusRow}>
             <ActivityIndicator size="small" color={COLORS.primary} />
-            <Text style={styles.loadingText}>Verifying PIN...</Text>
+            <Text style={styles.statusText}>Verifying PIN…</Text>
+          </View>
+        )}
+
+        {/* Lockout banner */}
+        {locked && (
+          <View style={styles.lockoutBanner}>
+            <Ionicons name="lock-closed-outline" size={20} color={COLORS.error} style={styles.lockoutIcon} />
+            <View style={styles.lockoutTextBlock}>
+              <Text style={styles.lockoutTitle}>Account temporarily locked</Text>
+              <Text style={styles.lockoutBody}>
+                Too many incorrect attempts. Try again in{' '}
+                <Text style={styles.lockoutCountdown}>{formatCountdown(lockoutMs)}</Text>.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* Attempt warning — show only when not locked and some attempts used */}
+        {!locked && attemptCount > 0 && attemptCount < MAX_PIN_ATTEMPTS && (
+          <View style={styles.warningBanner}>
+            <Ionicons name="warning-outline" size={16} color={COLORS.warning} />
+            <Text style={styles.warningText}>
+              {MAX_PIN_ATTEMPTS - attemptCount} attempt{MAX_PIN_ATTEMPTS - attemptCount === 1 ? '' : 's'} remaining before lockout
+            </Text>
           </View>
         )}
       </View>
 
-      {showBiometric && (
+      {showBiometric && !locked && (
         <TouchableOpacity
           style={styles.biometricButton}
           onPress={handleBiometricAuth}
@@ -194,16 +293,65 @@ const styles = StyleSheet.create({
   pinSection: {
     marginBottom: SPACING.xl,
   },
-  loadingContainer: {
+  statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: SPACING.md,
   },
-  loadingText: {
+  statusText: {
     fontSize: FONT_SIZES.sm,
     color: COLORS.textSecondary,
     marginLeft: SPACING.sm,
+  },
+  lockoutBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: COLORS.errorBg,
+    borderRadius: BORDER_RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.error + '40',
+    padding: SPACING.md,
+    marginTop: SPACING.lg,
+    gap: SPACING.sm,
+  },
+  lockoutIcon: {
+    marginTop: 2,
+  },
+  lockoutTextBlock: {
+    flex: 1,
+  },
+  lockoutTitle: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: '700',
+    color: COLORS.error,
+    marginBottom: SPACING.xs,
+  },
+  lockoutBody: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.errorDark,
+    lineHeight: 20,
+  },
+  lockoutCountdown: {
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  warningBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    backgroundColor: COLORS.warningBg,
+    borderRadius: BORDER_RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.warning + '40',
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    marginTop: SPACING.md,
+  },
+  warningText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.warningDark,
+    flex: 1,
   },
   biometricButton: {
     flexDirection: 'row',
