@@ -872,4 +872,174 @@ mod test {
             Err(Ok(Error::IntentExpired))
         );
     }
+
+    // ── Edge-case tests ────────────────────────────────────────────────────
+
+    /// Double-confirm: confirming an already-Confirmed intent must return
+    /// `InvalidStatus`, not silently overwrite the payment hash.
+    #[test]
+    fn rejects_double_confirm() {
+        let env = Env::default();
+        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
+
+        let merchant_id = id(&env, 40);
+        let intent_id = id(&env, 41);
+        let payment_hash_1 = id(&env, 42);
+        let payment_hash_2 = id(&env, 43);
+
+        client
+            .try_register_merchant(&merchant_id, &merchant)
+            .unwrap()
+            .unwrap();
+        client
+            .try_create_intent(
+                &payer,
+                &merchant_id,
+                &intent_id,
+                &50_i128,
+                &(env.ledger().timestamp() + 600),
+                &id(&env, 44),
+            )
+            .unwrap()
+            .unwrap();
+
+        // First confirm — must succeed
+        let confirmed = client
+            .try_confirm_intent(&intent_id, &payment_hash_1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(confirmed.status, PaymentStatus::Confirmed);
+        assert_eq!(confirmed.payment_hash, Some(payment_hash_1.clone()));
+
+        // Second confirm on the same intent — must be rejected
+        assert_eq!(
+            client.try_confirm_intent(&intent_id, &payment_hash_2),
+            Err(Ok(Error::InvalidStatus))
+        );
+
+        // Original payment hash must be preserved
+        let persisted = client.try_intent(&intent_id).unwrap().unwrap();
+        assert_eq!(persisted.payment_hash, Some(payment_hash_1));
+    }
+
+    /// Cancel-after-confirm: a Confirmed intent cannot be cancelled.
+    #[test]
+    fn rejects_cancel_after_confirm() {
+        let env = Env::default();
+        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
+
+        let merchant_id = id(&env, 45);
+        let intent_id = id(&env, 46);
+
+        client
+            .try_register_merchant(&merchant_id, &merchant)
+            .unwrap()
+            .unwrap();
+        client
+            .try_create_intent(
+                &payer,
+                &merchant_id,
+                &intent_id,
+                &50_i128,
+                &(env.ledger().timestamp() + 600),
+                &id(&env, 47),
+            )
+            .unwrap()
+            .unwrap();
+        client
+            .try_confirm_intent(&intent_id, &id(&env, 48))
+            .unwrap()
+            .unwrap();
+
+        // Cancel must now be rejected with InvalidStatus
+        assert_eq!(
+            client.try_cancel_intent(&payer, &intent_id),
+            Err(Ok(Error::InvalidStatus))
+        );
+    }
+
+    /// Negative amount is rejected the same way as zero.
+    #[test]
+    fn rejects_negative_amount() {
+        let env = Env::default();
+        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
+
+        let merchant_id = id(&env, 49);
+        client
+            .try_register_merchant(&merchant_id, &merchant)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            client.try_create_intent(
+                &payer,
+                &merchant_id,
+                &id(&env, 50),
+                &-1_i128,
+                &(env.ledger().timestamp() + 600),
+                &id(&env, 51),
+            ),
+            Err(Ok(Error::InvalidAmount))
+        );
+    }
+
+    /// Unpause: contract resumes accepting intents after being unpaused.
+    #[test]
+    fn unpause_resumes_intent_creation() {
+        let env = Env::default();
+        let (client, _admin, _token, _relayer, merchant, payer) = setup(&env);
+
+        let merchant_id = id(&env, 52);
+        client
+            .try_register_merchant(&merchant_id, &merchant)
+            .unwrap()
+            .unwrap();
+
+        // Pause
+        client.try_set_paused(&true).unwrap().unwrap();
+        assert_eq!(
+            client.try_create_intent(
+                &payer,
+                &merchant_id,
+                &id(&env, 53),
+                &50_i128,
+                &(env.ledger().timestamp() + 600),
+                &id(&env, 54),
+            ),
+            Err(Ok(Error::Paused))
+        );
+
+        // Unpause
+        client.try_set_paused(&false).unwrap().unwrap();
+        let intent = client
+            .try_create_intent(
+                &payer,
+                &merchant_id,
+                &id(&env, 55),
+                &50_i128,
+                &(env.ledger().timestamp() + 600),
+                &id(&env, 56),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(intent.status, PaymentStatus::Created);
+    }
+
+    /// read_config before initialization: calling config() before the
+    /// constructor panics with NotInitialized.
+    #[test]
+    fn config_returns_not_initialized_before_constructor() {
+        let env = Env::default();
+        env.mock_all_auths();
+        // Register the contract without calling the constructor by deploying
+        // with no init args — this is not possible via the typed client, so we
+        // directly instantiate and call config without a prior constructor.
+        // We test the error path by deploying and immediately trying to read.
+        let contract_id = env.register(CPayPayments, ());
+        let client = CPayPaymentsClient::new(&env, &contract_id);
+        assert_eq!(
+            client.try_config(),
+            Err(Ok(Error::NotInitialized))
+        );
+    }
 }
