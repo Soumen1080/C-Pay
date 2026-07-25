@@ -50,6 +50,19 @@ export const MerchantQRGeneratorScreen: React.FC<MerchantQRGeneratorScreenProps>
       if (walletAddress) {
         const profile = await getMerchantProfile(walletAddress);
         if (profile) {
+          // Gate: unapproved merchants cannot generate QR codes
+          const status = profile.verification_status || 'pending';
+          if (status !== 'approved') {
+            AlertManager.alert(
+              'Not Yet Approved',
+              status === 'rejected'
+                ? 'Your merchant account was not approved. QR generation is disabled. Please contact support.'
+                : 'Your merchant account is still under review. QR generation will be available once approved.',
+              [{ text: 'OK', onPress: () => navigation.goBack() }]
+            );
+            setInitialLoading(false);
+            return;
+          }
           setMerchantId(profile.id || null);
           setBusinessName(profile.business_name);
           if (profile.logo_url && profile.logo_url !== 'default-merchant-logo') {

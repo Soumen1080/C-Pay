@@ -76,6 +76,8 @@ app.get('/', (_req, res) => {
       'POST /accounts/prepare',
       'POST /accounts/submit',
       'POST /contract/merchants/register',
+      'POST /merchants/send-contact-otp',
+      'POST /merchants/verify-contact-otp',
       'GET /contract/config',
       'POST /payments/intents/prepare',
       'POST /payments/intents/submit',
@@ -245,6 +247,133 @@ app.post('/contract/merchants/register', requireAuthenticatedUser, async (req, r
     walletAddress,
     ...result,
   });
+});
+
+// ---------------------------------------------------------------------------
+// Merchant contact OTP — verifies business email WITHOUT changing the wallet
+// owner's Supabase auth session. Requires Supabase Admin API credentials on
+// the relayer (SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY).
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /merchants/send-contact-otp
+ * Body: { merchantId: string, contactEmail: string }
+ * Header: Authorization: Bearer <wallet owner session token>
+ *
+ * Sends an email OTP to contactEmail via the Supabase Admin API.
+ * The caller's auth session is never modified.
+ */
+app.post('/merchants/send-contact-otp', requireAuthenticatedUser, async (req, res) => {
+  assertSupabasePersistenceConfigured('POST /merchants/send-contact-otp');
+
+  const merchantId = assertNonEmptyString(req.body.merchantId, 'merchantId');
+  const contactEmail = assertNonEmptyString(req.body.contactEmail, 'contactEmail').toLowerCase().trim();
+
+  if (!isValidEmail(contactEmail)) {
+    return res.status(400).json({ error: 'Invalid contactEmail', code: 'INVALID_EMAIL' });
+  }
+
+  // Verify the authenticated user actually owns this merchant record.
+  const authUserId = req.auth?.sub;
+  const merchant = await fetchMerchantForOwner(merchantId, authUserId);
+  if (!merchant) {
+    return res.status(403).json({ error: 'Merchant not found or access denied', code: 'MERCHANT_ACCESS_DENIED' });
+  }
+
+  // Use the Admin API to generate a one-time link / send OTP without opening a
+  // session on this server-side call.
+  const adminRes = await fetch(
+    `${config.supabaseUrl.replace(/\/$/, '')}/auth/v1/otp`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: config.supabaseServiceRoleKey,
+        Authorization: `Bearer ${config.supabaseServiceRoleKey}`,
+      },
+      body: JSON.stringify({
+        email: contactEmail,
+        create_user: false,
+        // data is ignored for OTP but passing options keeps schema happy
+        options: { shouldCreateUser: false },
+      }),
+    }
+  );
+
+  if (!adminRes.ok) {
+    const body = await adminRes.json().catch(() => ({}));
+    const msg = body?.msg || body?.message || body?.error_description || 'Failed to send OTP';
+    return res.status(502).json({ error: msg, code: 'OTP_SEND_FAILED' });
+  }
+
+  // Record that an OTP was requested so we can audit later.
+  await upsertMerchantContactVerification({
+    authUserId,
+    merchantId,
+    contactEmail,
+  });
+
+  return res.json({ sent: true, contactEmail });
+});
+
+/**
+ * POST /merchants/verify-contact-otp
+ * Body: { merchantId: string, contactEmail: string, token: string }
+ * Header: Authorization: Bearer <wallet owner session token>
+ *
+ * Verifies the OTP server-side via the Supabase Admin API.
+ * On success: marks merchants.contact_email_verified = true,
+ *             merchants.verified_contact_email = contactEmail.
+ */
+app.post('/merchants/verify-contact-otp', requireAuthenticatedUser, async (req, res) => {
+  assertSupabasePersistenceConfigured('POST /merchants/verify-contact-otp');
+
+  const merchantId = assertNonEmptyString(req.body.merchantId, 'merchantId');
+  const contactEmail = assertNonEmptyString(req.body.contactEmail, 'contactEmail').toLowerCase().trim();
+  const token = assertNonEmptyString(req.body.token, 'token');
+
+  if (!isValidEmail(contactEmail)) {
+    return res.status(400).json({ error: 'Invalid contactEmail', code: 'INVALID_EMAIL' });
+  }
+
+  const authUserId = req.auth?.sub;
+  const merchant = await fetchMerchantForOwner(merchantId, authUserId);
+  if (!merchant) {
+    return res.status(403).json({ error: 'Merchant not found or access denied', code: 'MERCHANT_ACCESS_DENIED' });
+  }
+
+  // Verify OTP via the Supabase Admin API. This does NOT create a new session.
+  const verifyRes = await fetch(
+    `${config.supabaseUrl.replace(/\/$/, '')}/auth/v1/verify`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: config.supabaseServiceRoleKey,
+        Authorization: `Bearer ${config.supabaseServiceRoleKey}`,
+      },
+      body: JSON.stringify({ email: contactEmail, token, type: 'email' }),
+    }
+  );
+
+  if (!verifyRes.ok) {
+    const body = await verifyRes.json().catch(() => ({}));
+    const msg = body?.msg || body?.message || body?.error_description || 'Invalid or expired OTP code';
+    return res.status(400).json({ error: msg, code: 'OTP_INVALID' });
+  }
+
+  // Mark the merchant contact as verified and (in pilot mode) auto-approve.
+  const isPilotMode = readBooleanEnv('PILOT_MODE', true);
+  const newStatus = isPilotMode ? 'approved' : undefined; // undefined = leave as-is for non-pilot
+
+  await updateMerchantContactVerified({
+    merchantId,
+    contactEmail,
+    authUserId,
+    newVerificationStatus: newStatus,
+  });
+
+  return res.json({ verified: true, contactEmail, verificationStatus: newStatus || 'pending' });
 });
 
 app.post('/payments/intents/prepare', requireAuthenticatedUser, async (req, res) => {
@@ -970,6 +1099,120 @@ function assertContractAdminConfigured() {
     error.statusCode = 503;
     error.code = 'CONTRACT_ADMIN_NOT_CONFIGURED';
     throw error;
+  }
+}
+
+function assertSupabasePersistenceConfigured(endpoint) {
+  if (!isSupabasePersistenceEnabled()) {
+    const error = new Error(
+      `${endpoint} requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to be configured on the relayer`
+    );
+    error.statusCode = 503;
+    error.code = 'SUPABASE_NOT_CONFIGURED';
+    throw error;
+  }
+}
+
+function assertNonEmptyString(value, label) {
+  if (typeof value !== 'string' || !value.trim()) {
+    const error = new Error(`${label} is required and must be a non-empty string`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return value.trim();
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+/**
+ * Fetch a merchant row only when the given authUserId is the owner.
+ * Returns null when the merchant is not found or the user does not own it.
+ */
+async function fetchMerchantForOwner(merchantId, authUserId) {
+  try {
+    const rows = await supabaseRestRequest(
+      `merchants?id=eq.${encodeURIComponent(merchantId)}&auth_user_id=eq.${encodeURIComponent(authUserId)}&select=id,auth_user_id,verification_status`,
+      { method: 'GET', headers: { 'Accept': 'application/json', Prefer: 'return=representation' } }
+    );
+    return Array.isArray(rows) ? rows[0] || null : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Upsert a merchant_contact_verifications row after an OTP send request.
+ */
+async function upsertMerchantContactVerification({ authUserId, merchantId, contactEmail }) {
+  try {
+    await supabaseRestRequest(
+      'merchant_contact_verifications',
+      {
+        method: 'POST',
+        headers: {
+          Prefer: 'resolution=merge-duplicates,return=minimal',
+          'on-conflict': 'auth_user_id,merchant_id',
+        },
+        body: JSON.stringify({
+          auth_user_id: authUserId,
+          merchant_id: merchantId,
+          contact_email: contactEmail,
+          otp_sent_at: new Date().toISOString(),
+          is_verified: false,
+          verified_at: null,
+        }),
+      }
+    );
+  } catch (err) {
+    // Non-fatal — audit record failure should not block the OTP send response.
+    console.warn('Failed to upsert merchant_contact_verifications:', err.message);
+  }
+}
+
+/**
+ * Mark contact email as verified on the merchants row and the
+ * merchant_contact_verifications audit row.
+ */
+async function updateMerchantContactVerified({ merchantId, contactEmail, authUserId, newVerificationStatus }) {
+  const now = new Date().toISOString();
+
+  const merchantPatch = {
+    contact_email_verified: true,
+    verified_contact_email: contactEmail,
+    updated_at: now,
+  };
+  if (newVerificationStatus) {
+    merchantPatch.verification_status = newVerificationStatus;
+    merchantPatch.submitted_at = now;
+  }
+
+  await supabaseRestRequest(
+    `merchants?id=eq.${encodeURIComponent(merchantId)}&auth_user_id=eq.${encodeURIComponent(authUserId)}`,
+    {
+      method: 'PATCH',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify(merchantPatch),
+    }
+  );
+
+  // Update audit row
+  try {
+    await supabaseRestRequest(
+      `merchant_contact_verifications?merchant_id=eq.${encodeURIComponent(merchantId)}&auth_user_id=eq.${encodeURIComponent(authUserId)}`,
+      {
+        method: 'PATCH',
+        headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify({
+          is_verified: true,
+          verified_at: now,
+          updated_at: now,
+        }),
+      }
+    );
+  } catch (err) {
+    console.warn('Failed to update merchant_contact_verifications after OTP verify:', err.message);
   }
 }
 

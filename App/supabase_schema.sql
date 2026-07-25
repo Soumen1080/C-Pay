@@ -35,11 +35,34 @@ CREATE TABLE IF NOT EXISTS merchants (
     category TEXT,
     logo_url TEXT,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    -- KYB / contact verification fields
+    verification_status TEXT NOT NULL DEFAULT 'pending' CHECK (
+        verification_status IN ('pending', 'approved', 'rejected')
+    ),
+    verified_contact_email TEXT,
+    contact_email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    submitted_at TIMESTAMPTZ,
+    reviewed_at TIMESTAMPTZ,
+    rejection_reason TEXT,
     total_transactions INTEGER NOT NULL DEFAULT 0,
     total_revenue NUMERIC(20, 7) NOT NULL DEFAULT 0,
     stellar_network TEXT NOT NULL DEFAULT 'testnet',
     cpinr_asset_code TEXT NOT NULL DEFAULT 'CPINR',
     cpinr_asset_issuer TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Tracks merchant contact-email OTP verification sessions without touching the
+-- wallet owner's Supabase auth session.
+CREATE TABLE IF NOT EXISTS merchant_contact_verifications (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    auth_user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    merchant_id UUID REFERENCES merchants(id) ON DELETE CASCADE,
+    contact_email TEXT NOT NULL,
+    otp_sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    verified_at TIMESTAMPTZ,
+    is_verified BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -151,6 +174,13 @@ ALTER TABLE merchants ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE merchants ADD COLUMN IF NOT EXISTS category TEXT;
 ALTER TABLE merchants ADD COLUMN IF NOT EXISTS logo_url TEXT;
 ALTER TABLE merchants ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+-- KYB / contact verification columns (idempotent for existing projects)
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS verification_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS verified_contact_email TEXT;
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS contact_email_verified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ;
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
 ALTER TABLE merchants ADD COLUMN IF NOT EXISTS total_transactions INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE merchants ADD COLUMN IF NOT EXISTS total_revenue NUMERIC(20, 7) NOT NULL DEFAULT 0;
 ALTER TABLE merchants ADD COLUMN IF NOT EXISTS stellar_network TEXT NOT NULL DEFAULT 'testnet';
@@ -176,6 +206,8 @@ CREATE INDEX IF NOT EXISTS idx_users_cpay_id ON users(cpay_id);
 CREATE INDEX IF NOT EXISTS idx_merchants_wallet_address ON merchants(wallet_address);
 CREATE INDEX IF NOT EXISTS idx_merchants_auth_user_id ON merchants(auth_user_id);
 CREATE INDEX IF NOT EXISTS idx_merchants_cpay_id ON merchants(cpay_id);
+CREATE INDEX IF NOT EXISTS idx_merchant_contact_verifications_auth_user ON merchant_contact_verifications(auth_user_id);
+CREATE INDEX IF NOT EXISTS idx_merchant_contact_verifications_merchant ON merchant_contact_verifications(merchant_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_hash ON transactions(tx_hash);
 CREATE INDEX IF NOT EXISTS idx_transactions_from_address ON transactions(from_address);
@@ -228,6 +260,7 @@ ALTER TABLE merchant_qr_codes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE add_money_claims ENABLE ROW LEVEL SECURITY;
 ALTER TABLE relayer_idempotency_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE wallet_backups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE merchant_contact_verifications ENABLE ROW LEVEL SECURITY;
 
 CREATE OR REPLACE FUNCTION set_row_auth_user_id()
 RETURNS TRIGGER AS $$
@@ -333,6 +366,12 @@ RETURNS TABLE (
   category TEXT,
   logo_url TEXT,
   is_active BOOLEAN,
+  verification_status TEXT,
+  verified_contact_email TEXT,
+  contact_email_verified BOOLEAN,
+  submitted_at TIMESTAMPTZ,
+  reviewed_at TIMESTAMPTZ,
+  rejection_reason TEXT,
   total_transactions INTEGER,
   total_revenue NUMERIC,
   stellar_network TEXT,
@@ -356,6 +395,12 @@ RETURNS TABLE (
     m.category,
     m.logo_url,
     m.is_active,
+    m.verification_status,
+    m.verified_contact_email,
+    m.contact_email_verified,
+    m.submitted_at,
+    m.reviewed_at,
+    m.rejection_reason,
     m.total_transactions,
     m.total_revenue,
     m.stellar_network,
@@ -526,6 +571,26 @@ USING (auth.uid() IS NOT NULL AND auth_user_id = auth.uid());
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON wallet_backups TO authenticated;
 
+-- merchant_contact_verifications: wallet owner can read/write their own rows.
+-- The relayer uses the service-role key to write verified_at/is_verified.
+DROP POLICY IF EXISTS "merchant_contact_verifications_select_own" ON merchant_contact_verifications;
+CREATE POLICY "merchant_contact_verifications_select_own" ON merchant_contact_verifications
+FOR SELECT
+USING (auth.uid() IS NOT NULL AND auth_user_id = auth.uid());
+
+DROP POLICY IF EXISTS "merchant_contact_verifications_insert_own" ON merchant_contact_verifications;
+CREATE POLICY "merchant_contact_verifications_insert_own" ON merchant_contact_verifications
+FOR INSERT
+WITH CHECK (auth.uid() IS NOT NULL AND auth_user_id = auth.uid());
+
+DROP POLICY IF EXISTS "merchant_contact_verifications_update_own" ON merchant_contact_verifications;
+CREATE POLICY "merchant_contact_verifications_update_own" ON merchant_contact_verifications
+FOR UPDATE
+USING (auth.uid() IS NOT NULL AND auth_user_id = auth.uid())
+WITH CHECK (auth.uid() IS NOT NULL AND auth_user_id = auth.uid());
+
+GRANT SELECT, INSERT, UPDATE ON merchant_contact_verifications TO authenticated;
+
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -557,6 +622,11 @@ FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 DROP TRIGGER IF EXISTS update_wallet_backups_updated_at ON wallet_backups;
 CREATE TRIGGER update_wallet_backups_updated_at
 BEFORE UPDATE ON wallet_backups
+FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_merchant_contact_verifications_updated_at ON merchant_contact_verifications;
+CREATE TRIGGER update_merchant_contact_verifications_updated_at
+BEFORE UPDATE ON merchant_contact_verifications
 FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE OR REPLACE FUNCTION refresh_merchant_totals(p_merchant_id UUID)
