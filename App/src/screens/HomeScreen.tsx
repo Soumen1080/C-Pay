@@ -499,31 +499,70 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
         >
           <View style={styles.balanceHeader}>
             <View style={styles.balanceLabelContainer}>
-              <Ionicons name="wallet-outline" size={18} color={COLORS.textInverse} style={styles.balanceIcon} />
+              <Ionicons
+                name="wallet-outline"
+                size={18}
+                color={COLORS.textInverse}
+                style={styles.balanceIcon}
+                accessibilityElementsHidden
+                importantForAccessibility="no"
+              />
               <Text style={styles.balanceLabel}>{MONEY_BALANCE_LABEL}</Text>
             </View>
           </View>
-          
-          <View style={styles.balanceAmountContainer}>
-            <Text style={styles.balanceCurrency}>{MONEY_SYMBOL}</Text>
-            <Text style={styles.balanceAmount}>{parseFloat(balance).toFixed(2)}</Text>
+
+          <View
+            style={styles.balanceAmountContainer}
+            accessible
+            accessibilityLabel={`${MONEY_BALANCE_LABEL}: ${parseFloat(balance).toFixed(2)} ${MONEY_SYMBOL}. Pilot credits only.`}
+          >
+            <Text
+              style={styles.balanceCurrency}
+              importantForAccessibility="no"
+              accessibilityElementsHidden
+            >
+              {MONEY_SYMBOL}
+            </Text>
+            <Text
+              style={styles.balanceAmount}
+              importantForAccessibility="no"
+              // Cap font scaling so large-text mode doesn't break the card layout
+              maxFontSizeMultiplier={1.2}
+            >
+              {parseFloat(balance).toFixed(2)}
+            </Text>
           </View>
 
-          <Text style={styles.balanceUsd}>Pilot credits only</Text>
+          <Text
+            style={styles.balanceUsd}
+            importantForAccessibility="no"
+            accessibilityElementsHidden
+          >
+            Pilot credits only
+          </Text>
         </LinearGradient>
       </Animated.View>
 
-      {/* Quick Actions - Updated */}
+      {/* Quick Actions */}
       <View style={styles.quickActions}>
         <TouchableOpacity
           style={styles.actionCard}
           onPress={handleSendMoney}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="Send credits"
+          accessibilityHint="Go to send money screen"
         >
-          <View style={[styles.actionIconContainer, { backgroundColor: COLORS.primary + '20' }]}>
+          <View
+            style={[styles.actionIconContainer, { backgroundColor: COLORS.primary + '20' }]}
+            accessibilityElementsHidden
+            importantForAccessibility="no"
+          >
             <Ionicons name="send-outline" size={23} color={COLORS.primary} />
           </View>
-          <Text style={styles.actionTitle}>Send Credits</Text>
+          <Text style={styles.actionTitle} importantForAccessibility="no-hide-descendants">
+            Send Credits
+          </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -531,22 +570,40 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
           onPress={handleAddMoney}
           activeOpacity={0.8}
           disabled={addMoneyPhase !== 'idle'}
+          accessibilityRole="button"
+          accessibilityLabel="Claim pilot credits"
+          accessibilityHint="Claim your daily pilot credit allowance"
+          accessibilityState={{ disabled: addMoneyPhase !== 'idle', busy: isAddMoneyBusy }}
         >
-          <View style={[styles.actionIconContainer, { backgroundColor: COLORS.success + '20' }]}>
+          <View
+            style={[styles.actionIconContainer, { backgroundColor: COLORS.success + '20' }]}
+            accessibilityElementsHidden
+            importantForAccessibility="no"
+          >
             <Ionicons name="add-circle-outline" size={24} color={COLORS.success} />
           </View>
-          <Text style={styles.actionTitle}>Claim Credits</Text>
+          <Text style={styles.actionTitle} importantForAccessibility="no-hide-descendants">
+            Claim Credits
+          </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.actionCard}
           onPress={() => navigation.navigate('TransactionHistory')}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="View transaction history"
         >
-          <View style={[styles.actionIconContainer, { backgroundColor: COLORS.info + '20' }]}>
+          <View
+            style={[styles.actionIconContainer, { backgroundColor: COLORS.info + '20' }]}
+            accessibilityElementsHidden
+            importantForAccessibility="no"
+          >
             <Ionicons name="receipt-outline" size={23} color={COLORS.info} />
           </View>
-          <Text style={styles.actionTitle}>History</Text>
+          <Text style={styles.actionTitle} importantForAccessibility="no-hide-descendants">
+            History
+          </Text>
         </TouchableOpacity>
       </View>
 

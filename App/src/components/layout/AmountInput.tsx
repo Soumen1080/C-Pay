@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../../constants/theme';
 import { MONEY_SYMBOL, MONEY_UNIT_LABEL } from '../../utils/currency';
+import { A11Y } from '../../utils/strings';
 
 export interface AmountInputProps extends Omit<TextInputProps, 'keyboardType'> {
   label?: string;
@@ -65,7 +66,9 @@ export const AmountInput = forwardRef<TextInput, AmountInputProps>(
             !editable && styles.amountWrapDisabled,
           ]}
         >
-          <Text style={styles.symbol}>{symbol}</Text>
+          <Text style={styles.symbol} importantForAccessibility="no" accessibilityElementsHidden>
+            {symbol}
+          </Text>
           <TextInput
             ref={ref}
             style={[styles.input, style]}
@@ -75,9 +78,16 @@ export const AmountInput = forwardRef<TextInput, AmountInputProps>(
             onChangeText={onChangeText}
             keyboardType="decimal-pad"
             editable={editable}
+            // Derive accessible label from the label prop so screen readers
+            // announce "Amount input" rather than nothing.
+            accessibilityLabel={label || A11Y.AMOUNT_INPUT}
+            accessibilityHint={`Enter amount in ${unitLabel}`}
+            accessibilityState={{ disabled: !editable }}
             {...inputProps}
           />
-          <Text style={styles.unit}>{unitLabel}</Text>
+          <Text style={styles.unit} importantForAccessibility="no" accessibilityElementsHidden>
+            {unitLabel}
+          </Text>
         </View>
 
         {editable && quickAmounts && quickAmounts.length > 0 && (
@@ -88,6 +98,8 @@ export const AmountInput = forwardRef<TextInput, AmountInputProps>(
                 style={styles.quickChip}
                 onPress={() => (onQuickAmount ? onQuickAmount(amount) : onChangeText(amount))}
                 activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel={A11Y.QUICK_AMOUNT(`${symbol} ${amount} ${unitLabel}`)}
               >
                 <Text style={styles.quickChipText} numberOfLines={1}>
                   {symbol} {amount}
@@ -98,7 +110,10 @@ export const AmountInput = forwardRef<TextInput, AmountInputProps>(
         )}
 
         {(hasError || !!helper) && (
-          <Text style={[styles.helper, hasError && styles.errorText]}>
+          <Text
+            style={[styles.helper, hasError && styles.errorText]}
+            accessibilityRole={hasError ? 'alert' : undefined}
+          >
             {hasError ? error : helper}
           </Text>
         )}
@@ -165,6 +180,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: COLORS.border,
+    // Minimum tap target
+    minHeight: 44,
+    justifyContent: 'center',
   },
   quickChipText: {
     fontSize: FONT_SIZES.sm,

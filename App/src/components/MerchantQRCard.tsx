@@ -3,6 +3,7 @@ import { View, Text, Image, StyleSheet } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/theme';
+import { A11Y } from '../utils/strings';
 
 const DEFAULT_MERCHANT_LOGO = require('../../assets/default-merchant-image-cryptopay.png');
 const APP_LOGO = require('../../assets/cpay_logo.png');
@@ -34,6 +35,8 @@ export const MerchantQRCard: React.FC<MerchantQRCardProps> = ({
   size = 220,
   onLogoError,
 }) => {
+  const name = businessName || 'Merchant';
+
   return (
     <View style={styles.card}>
       <View style={styles.identity}>
@@ -41,13 +44,24 @@ export const MerchantQRCard: React.FC<MerchantQRCardProps> = ({
           source={logoUrl ? { uri: logoUrl } : DEFAULT_MERCHANT_LOGO}
           style={styles.logo}
           onError={onLogoError}
+          accessible
+          accessibilityLabel={A11Y.MERCHANT_LOGO(name)}
+          accessibilityRole="image"
         />
         <Text style={styles.businessName} numberOfLines={2}>
-          {businessName || 'Merchant'}
+          {name}
         </Text>
       </View>
 
-      <View style={styles.qrBox}>
+      {/* QR code: treat as a single accessible image so screen readers
+          announce it as a scannable QR code rather than reading individual
+          SVG paths. */}
+      <View
+        style={styles.qrBox}
+        accessible
+        accessibilityLabel={A11Y.MERCHANT_QR_CODE(name)}
+        accessibilityRole="image"
+      >
         {!!qrValue && (
           <QRCode
             value={qrValue}
@@ -66,7 +80,12 @@ export const MerchantQRCard: React.FC<MerchantQRCardProps> = ({
         </View>
       )}
 
-      <View style={styles.footer}>
+      <View
+        style={styles.footer}
+        // Decorative footer row; the parent accessibilityLabel covers it.
+        accessibilityElementsHidden
+        importantForAccessibility="no"
+      >
         <Ionicons name="scan-outline" size={14} color={COLORS.textSecondary} />
         <Text style={styles.footerText}>{footerText}</Text>
       </View>

@@ -47,7 +47,16 @@ export const Section: React.FC<SectionProps> = ({
             {!!subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}
           </View>
           {!!actionLabel && !!onActionPress && (
-            <TouchableOpacity onPress={onActionPress} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <TouchableOpacity
+              onPress={onActionPress}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel={
+                title ? `${actionLabel}, ${title} section` : actionLabel
+              }
+              style={styles.actionTouch}
+            >
               <Text style={styles.action}>{actionLabel}</Text>
             </TouchableOpacity>
           )}
@@ -83,5 +92,11 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.md,
     fontWeight: '600',
     color: COLORS.primary,
+  },
+  // Ensure minimum 44pt tap area on the trailing action button.
+  actionTouch: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: SPACING.xs,
   },
 });

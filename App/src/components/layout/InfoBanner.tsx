@@ -50,14 +50,50 @@ export const InfoBanner: React.FC<InfoBannerProps> = ({
 }) => {
   const v = VARIANT_STYLES[variant];
 
+  // Compose a complete accessible description for the banner so screen readers
+  // announce the variant, title and message together.
+  const bannerLabel = [
+    variant.charAt(0).toUpperCase() + variant.slice(1),
+    title,
+    message,
+  ]
+    .filter(Boolean)
+    .join('. ');
+
   return (
-    <View style={[styles.container, { backgroundColor: v.bg }, style]}>
-      <Ionicons name={icon || v.icon} size={20} color={v.fg} style={styles.icon} />
+    <View
+      style={[styles.container, { backgroundColor: v.bg }, style]}
+      accessible
+      accessibilityRole="alert"
+      accessibilityLabel={bannerLabel}
+    >
+      <Ionicons
+        name={icon || v.icon}
+        size={20}
+        color={v.fg}
+        style={styles.icon}
+        // Decorative — the accessible label above covers it.
+        accessibilityElementsHidden
+        importantForAccessibility="no"
+      />
       <View style={styles.textWrap}>
-        {!!title && <Text style={[styles.title, { color: v.fg }]}>{title}</Text>}
-        <Text style={styles.message}>{message}</Text>
+        {!!title && (
+          <Text style={[styles.title, { color: v.fg }]} importantForAccessibility="no-hide-descendants">
+            {title}
+          </Text>
+        )}
+        <Text style={styles.message} importantForAccessibility="no-hide-descendants">
+          {message}
+        </Text>
         {!!actionLabel && !!onActionPress && (
-          <TouchableOpacity onPress={onActionPress} activeOpacity={0.7} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+          <TouchableOpacity
+            onPress={onActionPress}
+            activeOpacity={0.7}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel={actionLabel}
+            style={styles.actionTouch}
+          >
             <Text style={[styles.action, { color: v.fg }]}>{actionLabel}</Text>
           </TouchableOpacity>
         )}
@@ -93,5 +129,11 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.sm,
     fontWeight: '700',
     marginTop: SPACING.sm,
+  },
+  // Ensures the inline action always has at least a 44pt touch height
+  actionTouch: {
+    minHeight: 44,
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
   },
 });

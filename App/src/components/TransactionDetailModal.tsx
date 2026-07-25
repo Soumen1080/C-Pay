@@ -15,6 +15,7 @@ import { convertAssetToINR, formatINR } from '../utils/currency';
 import { formatDateLong } from '../utils/date';
 import { formatWalletFingerprint, getCPayIdByWallet } from '../utils/cpayId';
 import { formatTransactionHash, getExplorerUrl, isValidTransactionHash } from '../services/blockchain';
+import { A11Y, TRANSACTION } from '../utils/strings';
 
 const FONT_SIZES = TYPOGRAPHY.sizes;
 
@@ -61,7 +62,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
         setToCPayId(toId || '');
       }
     };
-    
+
     if (transaction) {
       loadCPayIds();
     }
@@ -94,9 +95,9 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
     return formatDateLong(dateString);
   };
 
-  const copyToClipboard = async (text: string, label: string) => {
+  const copyToClipboard = async (text: string) => {
     await Clipboard.setStringAsync(text);
-    // Silent copy - no alert
+    // Silent copy
   };
 
   const openExplorer = () => {
@@ -112,13 +113,25 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
       animationType="slide"
       transparent={true}
       onRequestClose={onClose}
+      // Marks this as a modal so iOS screen readers trap focus inside it.
+      accessibilityViewIsModal
     >
       <View style={styles.overlay}>
-        <View style={styles.modalContainer}>
+        <View
+          style={styles.modalContainer}
+          accessible
+          accessibilityLabel={TRANSACTION.DETAILS_TITLE}
+        >
           {/* Header */}
           <View style={styles.header}>
-            <Text style={styles.headerTitle}>Transaction Details</Text>
-            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+            <Text style={styles.headerTitle}>{TRANSACTION.DETAILS_TITLE}</Text>
+            <TouchableOpacity
+              onPress={onClose}
+              style={styles.closeButton}
+              accessibilityRole="button"
+              accessibilityLabel={A11Y.CLOSE_MODAL}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
               <Ionicons name="close" size={24} color={COLORS.text} />
             </TouchableOpacity>
           </View>
@@ -126,14 +139,31 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
           <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
             {/* Amount Section */}
             <View style={styles.amountSection}>
-              <Text style={[styles.amountValue, { color: isMerchantView || isReceived ? '#10b981' : COLORS.text }]}>
+              <Text
+                style={[
+                  styles.amountValue,
+                  { color: isMerchantView || isReceived ? '#10b981' : COLORS.text },
+                ]}
+                accessibilityLabel={`Amount: ${isMerchantView || isReceived ? 'received' : 'sent'} ${formatINR(inrAmount)}`}
+                maxFontSizeMultiplier={1.3}
+              >
                 {isMerchantView || isReceived ? '+' : '-'}{formatINR(inrAmount)}
               </Text>
             </View>
 
             {/* Status Badge */}
-            <View style={[styles.statusBadge, { backgroundColor: statusConfig.bg }]}>
-              <Ionicons name={statusConfig.icon as any} size={20} color={statusConfig.color} />
+            <View
+              style={[styles.statusBadge, { backgroundColor: statusConfig.bg }]}
+              accessibilityLabel={`Status: ${statusConfig.label}`}
+              accessible
+            >
+              <Ionicons
+                name={statusConfig.icon as any}
+                size={20}
+                color={statusConfig.color}
+                accessibilityElementsHidden
+                importantForAccessibility="no"
+              />
               <Text style={[styles.statusText, { color: statusConfig.color }]}>
                 {statusConfig.label}
               </Text>
@@ -144,22 +174,35 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
               {/* Stellar transaction hash */}
               {hasChainHash && (
                 <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Transaction Hash</Text>
+                  <Text style={styles.detailLabel}>{TRANSACTION.HASH_LABEL}</Text>
                   <View style={styles.detailValueRow}>
                     <TouchableOpacity
                       style={styles.hashButton}
-                      onPress={() => copyToClipboard(transaction.tx_hash!, 'Transaction Hash')}
+                      onPress={() => copyToClipboard(transaction.tx_hash!)}
                       activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel={A11Y.COPY}
+                      accessibilityHint={TRANSACTION.COPY_HASH_HINT}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     >
                       <Text style={styles.detailValueHighlight}>
                         {formatTransactionHash(transaction.tx_hash)}
                       </Text>
-                      <Ionicons name="copy-outline" size={16} color={COLORS.primary} />
+                      <Ionicons
+                        name="copy-outline"
+                        size={16}
+                        color={COLORS.primary}
+                        accessibilityElementsHidden
+                        importantForAccessibility="no"
+                      />
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={styles.iconButton}
                       onPress={openExplorer}
                       activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel={A11Y.VIEW_IN_EXPLORER}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     >
                       <Ionicons name="open-outline" size={16} color={COLORS.primary} />
                     </TouchableOpacity>
@@ -169,25 +212,40 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
 
               {/* Type */}
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Type</Text>
+                <Text style={styles.detailLabel}>{TRANSACTION.TYPE_LABEL}</Text>
                 <Text style={styles.detailValue}>
-                  {isMerchantView ? 'Payment Received' : 
-                   isReceived ? 'Received' : 'Sent'}
+                  {isMerchantView
+                    ? TRANSACTION.TYPE_PAYMENT_RECEIVED
+                    : isReceived
+                    ? TRANSACTION.TYPE_RECEIVED
+                    : TRANSACTION.TYPE_SENT}
                 </Text>
               </View>
 
               {/* Transaction Type - hide for merchant view and received transactions */}
               {transaction.transaction_type && !isMerchantView && !isReceived && (
                 <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Payment Method</Text>
-                  <View style={[
-                    styles.typeBadge,
-                    { backgroundColor: transaction.transaction_type === 'merchant' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(139, 92, 246, 0.15)' }
-                  ]}>
-                    <Text style={[
-                      styles.typeText,
-                      { color: transaction.transaction_type === 'merchant' ? '#3b82f6' : '#8b5cf6' }
-                    ]}>
+                  <Text style={styles.detailLabel}>{TRANSACTION.METHOD_LABEL}</Text>
+                  <View
+                    style={[
+                      styles.typeBadge,
+                      {
+                        backgroundColor:
+                          transaction.transaction_type === 'merchant'
+                            ? 'rgba(59, 130, 246, 0.15)'
+                            : 'rgba(139, 92, 246, 0.15)',
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.typeText,
+                        {
+                          color:
+                            transaction.transaction_type === 'merchant' ? '#3b82f6' : '#8b5cf6',
+                        },
+                      ]}
+                    >
                       {transaction.transaction_type === 'merchant' ? 'Merchant QR' : 'Personal'}
                     </Text>
                   </View>
@@ -196,7 +254,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
 
               {/* Date */}
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Date & Time</Text>
+                <Text style={styles.detailLabel}>{TRANSACTION.DATE_TIME_LABEL}</Text>
                 <Text style={styles.detailValue}>{formatDate(transaction.created_at)}</Text>
               </View>
 
@@ -204,14 +262,28 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
               {transaction.from_address && (
                 <TouchableOpacity
                   style={styles.detailRow}
-                  onPress={() => copyToClipboard(fromCPayId || formatWalletFingerprint(transaction.from_address!), 'From ID')}
+                  onPress={() =>
+                    copyToClipboard(
+                      fromCPayId || formatWalletFingerprint(transaction.from_address!)
+                    )
+                  }
+                  accessibilityRole="button"
+                  accessibilityLabel={`${TRANSACTION.FROM_LABEL}: ${fromCPayId || formatWalletFingerprint(transaction.from_address)}`}
+                  accessibilityHint={TRANSACTION.COPY_FROM_HINT}
+                  hitSlop={{ top: 4, bottom: 4, left: 0, right: 0 }}
                 >
-                  <Text style={styles.detailLabel}>From</Text>
+                  <Text style={styles.detailLabel}>{TRANSACTION.FROM_LABEL}</Text>
                   <View style={styles.detailValueRow}>
                     <Text style={styles.addressText} numberOfLines={1}>
                       {fromCPayId || formatWalletFingerprint(transaction.from_address)}
                     </Text>
-                    <Ionicons name="copy-outline" size={16} color={COLORS.primary} />
+                    <Ionicons
+                      name="copy-outline"
+                      size={16}
+                      color={COLORS.primary}
+                      accessibilityElementsHidden
+                      importantForAccessibility="no"
+                    />
                   </View>
                 </TouchableOpacity>
               )}
@@ -220,14 +292,28 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
               {transaction.to_address && (
                 <TouchableOpacity
                   style={styles.detailRow}
-                  onPress={() => copyToClipboard(toCPayId || formatWalletFingerprint(transaction.to_address!), 'To ID')}
+                  onPress={() =>
+                    copyToClipboard(
+                      toCPayId || formatWalletFingerprint(transaction.to_address!)
+                    )
+                  }
+                  accessibilityRole="button"
+                  accessibilityLabel={`${TRANSACTION.TO_LABEL}: ${toCPayId || formatWalletFingerprint(transaction.to_address)}`}
+                  accessibilityHint={TRANSACTION.COPY_TO_HINT}
+                  hitSlop={{ top: 4, bottom: 4, left: 0, right: 0 }}
                 >
-                  <Text style={styles.detailLabel}>To</Text>
+                  <Text style={styles.detailLabel}>{TRANSACTION.TO_LABEL}</Text>
                   <View style={styles.detailValueRow}>
                     <Text style={styles.addressText} numberOfLines={1}>
                       {toCPayId || formatWalletFingerprint(transaction.to_address)}
                     </Text>
-                    <Ionicons name="copy-outline" size={16} color={COLORS.primary} />
+                    <Ionicons
+                      name="copy-outline"
+                      size={16}
+                      color={COLORS.primary}
+                      accessibilityElementsHidden
+                      importantForAccessibility="no"
+                    />
                   </View>
                 </TouchableOpacity>
               )}
@@ -235,7 +321,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
               {/* Merchant Name - hide for merchant view and received transactions */}
               {transaction.merchant_name && !isMerchantView && !isReceived && (
                 <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Note/Merchant</Text>
+                  <Text style={styles.detailLabel}>{TRANSACTION.NOTE_LABEL}</Text>
                   <Text style={styles.detailValue}>{transaction.merchant_name}</Text>
                 </View>
               )}
@@ -243,8 +329,13 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
           </ScrollView>
 
           {/* Close Button */}
-          <TouchableOpacity style={styles.doneButton} onPress={onClose}>
-            <Text style={styles.doneButtonText}>Done</Text>
+          <TouchableOpacity
+            style={styles.doneButton}
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel={TRANSACTION.DONE}
+          >
+            <Text style={styles.doneButtonText}>{TRANSACTION.DONE}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -278,8 +369,12 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: COLORS.text,
   },
+  // Minimum 44×44 tap target for close button
   closeButton: {
-    padding: SPACING.xs,
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   content: {
     padding: SPACING.md,
@@ -288,18 +383,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: SPACING.lg,
   },
-  amountLabel: {
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
   amountValue: {
     fontSize: 36,
     fontWeight: 'bold',
-  },
-  amountINR: {
-    fontSize: FONT_SIZES.md,
-    color: COLORS.textSecondary,
-    marginTop: 4,
   },
   statusBadge: {
     flexDirection: 'row',
@@ -311,6 +397,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     gap: 8,
     marginBottom: SPACING.lg,
+    minHeight: 36,
   },
   statusText: {
     fontSize: FONT_SIZES.md,
@@ -330,6 +417,8 @@ const styles = StyleSheet.create({
     paddingVertical: SPACING.sm,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
+    // Minimum touch target height for tappable rows
+    minHeight: 44,
   },
   detailLabel: {
     fontSize: FONT_SIZES.sm,
@@ -362,13 +451,12 @@ const styles = StyleSheet.create({
   },
   iconButton: {
     padding: 2,
+    minWidth: 32,
+    minHeight: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   addressText: {
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.text,
-    fontFamily: 'monospace',
-  },
-  hashText: {
     fontSize: FONT_SIZES.xs,
     color: COLORS.text,
     fontFamily: 'monospace',
@@ -382,25 +470,14 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.xs,
     fontWeight: '600',
   },
-  explorerButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: SPACING.md,
-    padding: SPACING.md,
-    gap: 8,
-  },
-  explorerButtonText: {
-    fontSize: FONT_SIZES.sm,
-    color: COLORS.primary,
-    fontWeight: '600',
-  },
   doneButton: {
     backgroundColor: COLORS.primary,
     marginHorizontal: SPACING.md,
     padding: SPACING.md,
     borderRadius: 12,
     alignItems: 'center',
+    minHeight: 48,
+    justifyContent: 'center',
   },
   doneButtonText: {
     color: '#fff',
