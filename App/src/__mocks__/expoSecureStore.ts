@@ -1,6 +1,11 @@
 // Mock for expo-secure-store
-const store: Record<string, string> = {};
+// Exposes __store so tests can reset it directly with resetStore().
 
-export const getItemAsync = jest.fn(async (key: string) => store[key] ?? null);
-export const setItemAsync = jest.fn(async (key: string, value: string) => { store[key] = value; });
-export const deleteItemAsync = jest.fn(async (key: string) => { delete store[key]; });
+const __store: Record<string, string> = {};
+
+module.exports = {
+  __store,
+  getItemAsync: jest.fn(async (key: string) => __store[key] ?? null),
+  setItemAsync: jest.fn(async (key: string, value: string) => { __store[key] = value; }),
+  deleteItemAsync: jest.fn(async (key: string) => { delete __store[key]; }),
+};
