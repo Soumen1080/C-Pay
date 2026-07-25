@@ -406,6 +406,96 @@ export async function verifyEmailOTP(
 }
 
 /**
+ * Send a merchant contact email OTP via the relayer's Admin API path.
+ * This does NOT call supabase.auth.signInWithOtp — the wallet owner's
+ * Supabase session is never modified.
+ *
+ * Requires a provisional merchantId (from the just-inserted merchants row)
+ * and the business contact email to verify.
+ */
+export async function sendMerchantContactOtp(
+  merchantId: string,
+  contactEmail: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const accessToken = data.session?.access_token;
+    if (!accessToken) {
+      return { success: false, error: 'No active session — please log in again' };
+    }
+
+    const relayerUrl = (process.env.EXPO_PUBLIC_STELLAR_RELAYER_URL || '').replace(/\/+$/, '');
+    if (!relayerUrl) {
+      return { success: false, error: 'Relayer URL not configured' };
+    }
+
+    const response = await fetch(`${relayerUrl}/merchants/send-contact-otp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ merchantId, contactEmail }),
+    });
+
+    const body = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return { success: false, error: body?.error || 'Failed to send verification code' };
+    }
+
+    return { success: true };
+  } catch (error: any) {
+    console.error('sendMerchantContactOtp error:', error);
+    return { success: false, error: error.message || 'Failed to send verification code' };
+  }
+}
+
+/**
+ * Verify a merchant contact email OTP via the relayer.
+ * On success the relayer marks contact_email_verified = true on the merchants
+ * row and auto-approves the merchant in pilot mode.
+ */
+export async function verifyMerchantContactOtp(
+  merchantId: string,
+  contactEmail: string,
+  token: string
+): Promise<{ success: boolean; verificationStatus?: string; error?: string }> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const accessToken = data.session?.access_token;
+    if (!accessToken) {
+      return { success: false, error: 'No active session — please log in again' };
+    }
+
+    const relayerUrl = (process.env.EXPO_PUBLIC_STELLAR_RELAYER_URL || '').replace(/\/+$/, '');
+    if (!relayerUrl) {
+      return { success: false, error: 'Relayer URL not configured' };
+    }
+
+    const response = await fetch(`${relayerUrl}/merchants/verify-contact-otp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ merchantId, contactEmail, token }),
+    });
+
+    const body = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return { success: false, error: body?.error || 'Invalid or expired verification code' };
+    }
+
+    return { success: true, verificationStatus: body?.verificationStatus };
+  } catch (error: any) {
+    console.error('verifyMerchantContactOtp error:', error);
+    return { success: false, error: error.message || 'Failed to verify code' };
+  }
+}
+
+/**
  * Send OTP to phone number when an SMS provider is configured
  */
 export async function sendPhoneOTP(phoneNumber: string): Promise<{

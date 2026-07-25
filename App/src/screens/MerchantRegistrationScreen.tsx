@@ -11,8 +11,9 @@ import {
   Image,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { registerAsMerchant, uploadMerchantLogo } from '../services/merchant';
-import { sendEmailOTP, verifyEmailOTP } from '../services/auth';
+import { registerAsMerchant, syncMerchantContract, uploadMerchantLogo } from '../services/merchant';
+import { sendMerchantContactOtp, verifyMerchantContactOtp } from '../services/auth';
+import { supabase } from '../services/supabase';
 import { PINInput } from '../components/PINInput';
 import { Screen, Header, FormField, Button, Section, InfoBanner } from '../components';
 import { COLORS, SPACING, TYPOGRAPHY, BORDER_RADIUS } from '../constants/theme';
@@ -66,9 +67,11 @@ export const MerchantRegistrationScreen: React.FC<
   const [loading, setLoading] = useState(false);
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
   
-  // Email verification states
+  // Email verification states.
+  // pendingMerchantId is set after the draft merchant row is created so we can
+  // pass it to the relayer OTP endpoints without opening a new auth session.
   const [emailVerified, setEmailVerified] = useState(false);
-  const [emailVerificationId, setEmailVerificationId] = useState('');
+  const [pendingMerchantId, setPendingMerchantId] = useState('');
   const [emailOTP, setEmailOTP] = useState('');
   const [emailOTPError, setEmailOTPError] = useState('');
   const [showEmailOTPModal, setShowEmailOTPModal] = useState(false);
@@ -79,7 +82,7 @@ export const MerchantRegistrationScreen: React.FC<
     if (emailVerified) {
       setEmailVerified(false);
     }
-    setEmailVerificationId('');
+    setPendingMerchantId('');
     setEmailOTP('');
     setEmailOTPError('');
   };
@@ -133,18 +136,70 @@ export const MerchantRegistrationScreen: React.FC<
       return;
     }
 
+    // We need to validate required fields before creating the draft merchant
+    // row, because the relayer needs a merchantId to scope the OTP.
+    if (!businessName.trim()) {
+      AlertManager.alert('Error', 'Please enter your business name before verifying email');
+      return;
+    }
+    if (!ownerName.trim()) {
+      AlertManager.alert('Error', 'Please enter the owner name before verifying email');
+      return;
+    }
+
+    const walletAddress = await AsyncStorage.getItem('wallet_address');
+    if (!walletAddress) {
+      AlertManager.alert('Error', 'Wallet address not found. Please restart the app.');
+      return;
+    }
+
     setEmailOTPLoading(true);
     setEmail(normalizedEmail);
     setEmailOTP('');
     setEmailOTPError('');
-    const result = await sendEmailOTP(normalizedEmail);
+
+    // If we already have a pending draft merchant row, reuse it.
+    let merchantId = pendingMerchantId;
+
+    if (!merchantId) {
+      // Create a minimal draft merchant row so we can pass merchantId to the
+      // relayer. The row will be completed (logo, address, etc.) when the user
+      // taps "Register" after OTP verification. We mark it inactive until done.
+      const finalCategory = category === 'other' ? customCategory : category;
+      const normalizedPhone = normalizeMerchantPhoneInput(phoneNumber);
+
+      const draftResult = await registerAsMerchant({
+        business_name: businessName.trim(),
+        wallet_address: walletAddress,
+        owner_name: ownerName.trim(),
+        email: normalizedEmail,
+        phone_number: normalizedPhone || undefined,
+        business_address: businessAddress.trim() || undefined,
+        business_registration_number: businessRegistrationNumber.trim() || undefined,
+        description: description.trim() || undefined,
+        category: finalCategory || undefined,
+        logo_url: 'default-merchant-logo',
+        is_active: false, // inactive until fully confirmed
+      });
+
+      if (!draftResult.success || !draftResult.merchantId) {
+        setEmailOTPLoading(false);
+        AlertManager.alert('Error', draftResult.error || 'Could not create merchant draft. Please try again.');
+        return;
+      }
+
+      merchantId = draftResult.merchantId;
+      setPendingMerchantId(merchantId);
+    }
+
+    // Now ask the relayer to send the OTP using the Admin API (no session change).
+    const result = await sendMerchantContactOtp(merchantId, normalizedEmail);
     setEmailOTPLoading(false);
 
-    if (result.success && result.verificationId) {
-      setEmailVerificationId(result.verificationId);
+    if (result.success) {
       setShowEmailOTPModal(true);
     } else {
-      AlertManager.alert('Error', result.error || 'Failed to send OTP');
+      AlertManager.alert('Error', result.error || 'Failed to send verification code');
     }
   };
 
@@ -161,9 +216,14 @@ export const MerchantRegistrationScreen: React.FC<
       return;
     }
 
+    if (!pendingMerchantId) {
+      setEmailOTPError('Something went wrong — please tap "Send code" again');
+      return;
+    }
+
     setEmailOTPError('');
     setEmailOTPLoading(true);
-    const result = await verifyEmailOTP(emailVerificationId, otpToVerify);
+    const result = await verifyMerchantContactOtp(pendingMerchantId, email.trim().toLowerCase(), otpToVerify);
     setEmailOTPLoading(false);
 
     if (result.success) {
@@ -236,14 +296,12 @@ export const MerchantRegistrationScreen: React.FC<
     try {
       setLoading(true);
 
-      // Get wallet address
       const walletAddress = await AsyncStorage.getItem('wallet_address');
       if (!walletAddress) {
         AlertManager.alert('Error', 'Wallet address not found');
         return;
       }
 
-      // Determine final category
       const finalCategory = category === 'other' ? customCategory : category;
 
       // Upload logo or use default
@@ -257,28 +315,47 @@ export const MerchantRegistrationScreen: React.FC<
         }
         logoUrl = uploadedLogoUrl;
       } else {
-        // Use default merchant logo - construct the URL from assets
-        // When building the app, this will be bundled with the app
         logoUrl = 'default-merchant-logo';
       }
 
-      // Register as merchant
-      const result = await registerAsMerchant({
-        business_name: businessName,
-        wallet_address: walletAddress,
-        description: description || undefined,
-        category: finalCategory,
-        owner_name: ownerName,
-        email: normalizedEmail,
-        phone_number: normalizedPhone,
-        business_address: businessAddress,
-        business_registration_number: businessRegistrationNumber || undefined,
-        logo_url: logoUrl,
-        is_active: true,
-      });
+      let merchantId = pendingMerchantId;
 
-      if (result.success) {
-        if (result.contractSynced === false) {
+      if (merchantId) {
+        // A draft row already exists from the OTP send step — update it to its
+        // final state and activate it. This avoids a duplicate-key error on
+        // wallet_address and preserves the verified_contact_email already set
+        // by the relayer.
+        const { error: updateError } = await supabase
+          .from('merchants')
+          .update({
+            business_name: businessName.trim(),
+            owner_name: ownerName.trim(),
+            email: normalizedEmail,
+            phone_number: normalizedPhone,
+            business_address: businessAddress.trim(),
+            business_registration_number: businessRegistrationNumber.trim() || null,
+            description: description.trim() || null,
+            category: finalCategory,
+            logo_url: logoUrl,
+            is_active: true,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', merchantId);
+
+        if (updateError) {
+          AlertManager.alert('Error', updateError.message || 'Failed to update merchant profile');
+          return;
+        }
+
+        // Store merchant id locally
+        await AsyncStorage.multiSet([
+          ['is_merchant', 'true'],
+          ['merchant_id', merchantId],
+        ]);
+
+        // Sync the contract (may already be done from the draft step)
+        const syncResult = await syncMerchantContract(merchantId, walletAddress);
+        if (!syncResult.success) {
           AlertManager.alert(
             'Merchant Saved',
             'Your profile is saved, but the on-chain contract sync did not finish. Open your dashboard and tap "Retry" under Business status to finish — QR payments work once it completes.',
@@ -286,11 +363,38 @@ export const MerchantRegistrationScreen: React.FC<
             { type: 'warning' }
           );
         }
-        // Replace registration screen with dashboard
-        // So back button from dashboard goes to Profile, not registration form
+
         navigation.replace('MerchantDashboard');
       } else {
-        AlertManager.alert('Error', result.error || 'Failed to register as merchant');
+        // No draft row yet — do a full registration (fallback path, e.g. relayer
+        // not configured so OTP was skipped).
+        const result = await registerAsMerchant({
+          business_name: businessName.trim(),
+          wallet_address: walletAddress,
+          description: description.trim() || undefined,
+          category: finalCategory,
+          owner_name: ownerName.trim(),
+          email: normalizedEmail,
+          phone_number: normalizedPhone,
+          business_address: businessAddress.trim(),
+          business_registration_number: businessRegistrationNumber.trim() || undefined,
+          logo_url: logoUrl,
+          is_active: true,
+        });
+
+        if (result.success) {
+          if (result.contractSynced === false) {
+            AlertManager.alert(
+              'Merchant Saved',
+              'Your profile is saved, but the on-chain contract sync did not finish. Open your dashboard and tap "Retry" under Business status to finish — QR payments work once it completes.',
+              undefined,
+              { type: 'warning' }
+            );
+          }
+          navigation.replace('MerchantDashboard');
+        } else {
+          AlertManager.alert('Error', result.error || 'Failed to register as merchant');
+        }
       }
     } catch (error: any) {
       AlertManager.alert('Error', error.message || 'Failed to register');

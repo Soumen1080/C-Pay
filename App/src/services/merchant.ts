@@ -26,6 +26,13 @@ export interface Merchant {
   category?: string;
   logo_url?: string;
   is_active?: boolean;
+  // KYB / contact verification fields
+  verification_status?: 'pending' | 'approved' | 'rejected';
+  verified_contact_email?: string;
+  contact_email_verified?: boolean;
+  submitted_at?: string;
+  reviewed_at?: string;
+  rejection_reason?: string;
   total_transactions?: number;
   total_revenue?: string;
   created_at?: string;
@@ -207,6 +214,7 @@ export async function registerAsMerchant(merchant: Merchant): Promise<{
   merchantId?: string;
   contractSynced?: boolean;
   contractStatus?: string;
+  verificationStatus?: string;
   error?: string;
 }> {
   try {
@@ -216,12 +224,19 @@ export async function registerAsMerchant(merchant: Merchant): Promise<{
       : undefined;
     const authUserId = await getCurrentAuthUserId();
 
+    const isPilotMode = process.env.EXPO_PUBLIC_PILOT_MODE !== 'false';
+    // In pilot mode, registration is auto-approved. In production, leave as pending
+    // until an admin reviews the KYB submission.
+    const verificationStatus = isPilotMode ? 'approved' : 'pending';
+
     const { data, error } = await supabase
       .from('merchants')
       .insert({
         ...merchant,
         auth_user_id: authUserId,
-        cpay_id: cpayId, // Save C-Pay ID to database
+        cpay_id: cpayId,
+        verification_status: verificationStatus,
+        submitted_at: new Date().toISOString(),
       })
       .select()
       .single();
@@ -256,6 +271,7 @@ export async function registerAsMerchant(merchant: Merchant): Promise<{
       merchantId: data.id,
       contractSynced,
       contractStatus,
+      verificationStatus: data.verification_status || verificationStatus,
       ...(contractError ? { error: contractError } : {}),
     };
   } catch (error: any) {
