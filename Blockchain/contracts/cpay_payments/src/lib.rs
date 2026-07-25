@@ -1,5 +1,39 @@
 #![no_std]
 
+//! C-Pay Soroban Payment Intent Contract
+//!
+//! # Trust Boundary & Payment Assurance Model
+//!
+//! This contract stores merchant registration and payment intent state on-chain, but
+//! **token movement itself happens via classic Stellar payment operations**, not through
+//! this contract or the Stellar Asset Contract (SAC) interface.
+//!
+//! ## What is enforced on-chain:
+//! - Merchant registration and activation status
+//! - Payment intent creation with expiry and amount recorded
+//! - Payment intent state transitions (Created → Submitted → Confirmed/Expired/Cancelled)
+//! - Authorization checks: payer signs intent creation, relayer signs confirmation
+//! - Intent lifecycle bounds (min/max lifetime, expiry checks)
+//!
+//! ## What is verified off-chain by the relayer:
+//! - Actual token transfer on Stellar (payment operation in user-signed XDR)
+//! - Amount, asset, source, and destination match the intent
+//! - Payment transaction succeeds and is included in a ledger
+//!
+//! The relayer acts as a **trusted verifier** that observes the Stellar payment,
+//! then confirms the intent on-chain. This design keeps gas costs low and allows
+//! the contract to support existing Stellar wallets and payment flows without requiring
+//! SAC-aware wallet signing or contract-controlled token custody.
+//!
+//! For stronger on-chain payment assurance, consider:
+//! - Migrating to SAC-native token transfers invoked directly by this contract
+//! - Adding a timelock + challenge mechanism for intent confirmation disputes
+//! - Multi-signature relayer confirmation or oracle network verification
+//!
+//! The current model is production-ready for environments where the relayer is
+//! operated by the C-Pay platform and auditability comes from contract event logs
+//! cross-referenced with Stellar transaction history.
+
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error, Address,
     BytesN, Env,
@@ -29,9 +63,24 @@ pub struct Merchant {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PaymentStatus {
+    /// Intent created and waiting for a matching Stellar payment.
     Created,
+    /// Relayer has observed the Stellar payment and marked the intent as
+    /// submitted. The on-chain confirmation step follows once the payment
+    /// is included in a ledger.
+    Submitted,
+    /// Relayer has confirmed the Stellar payment hash on-chain. Terminal.
     Confirmed,
+    /// Explicitly expired by the admin after the `expires_at` timestamp
+    /// passed without a corresponding Stellar payment.  Terminal.
+    Expired,
+    /// Payer cancelled the intent before the relayer submitted a payment.
+    /// Terminal.
     Cancelled,
+    /// Payment was submitted but the on-chain confirmation failed or could
+    /// not be reconciled (e.g. wrong amount, wrong asset, missing hash).
+    /// Requires manual admin review. Terminal until resolved.
+    ReconciliationNeeded,
 }
 
 #[contracttype]
@@ -44,8 +93,11 @@ pub struct PaymentIntent {
     pub memo_hash: BytesN<32>,
     pub expires_at: u64,
     pub created_at: u64,
+    pub submitted_at: Option<u64>,
+    pub confirmed_at: Option<u64>,
     pub status: PaymentStatus,
     pub payment_hash: Option<BytesN<32>>,
+    pub submitted_by: Option<Address>,
 }
 
 #[contracttype]
@@ -74,6 +126,18 @@ pub enum Error {
     MerchantExists = 12,
     IntentLifetimeTooLong = 13,
     PayerMismatch = 14,
+    /// Caller is not authorised to perform this operation (e.g. non-relayer
+    /// calling a relayer-only function).
+    Unauthorized = 15,
+    /// Confirmation rejected because the same intent was already confirmed
+    /// with a different or identical payment hash.
+    DuplicateConfirmation = 16,
+    /// Admin attempted to expire an intent that has not yet passed its
+    /// `expires_at` timestamp.
+    NotYetExpired = 17,
+    /// The intent could not be reconciled because it is already in a terminal
+    /// state (Confirmed, Expired, or Cancelled).
+    AlreadyTerminal = 18,
 }
 
 #[contractevent(topics = ["config", "init"], data_format = "vec")]
@@ -149,6 +213,28 @@ pub struct IntentCancelled {
     #[topic]
     pub intent_id: BytesN<32>,
     pub payer: Address,
+}
+
+#[contractevent(topics = ["intent", "submit"], data_format = "vec")]
+pub struct IntentSubmitted {
+    #[topic]
+    pub intent_id: BytesN<32>,
+    pub submitted_by: Address,
+    pub payment_hash: BytesN<32>,
+}
+
+#[contractevent(topics = ["intent", "expire"], data_format = "single-value")]
+pub struct IntentExpired {
+    #[topic]
+    pub intent_id: BytesN<32>,
+    pub expired_at: u64,
+}
+
+#[contractevent(topics = ["intent", "reconcile"], data_format = "vec")]
+pub struct IntentReconciliationNeeded {
+    #[topic]
+    pub intent_id: BytesN<32>,
+    pub reason: soroban_sdk::String,
 }
 
 #[contract]
@@ -362,8 +448,11 @@ impl CPayPayments {
             memo_hash,
             expires_at,
             created_at: now,
+            submitted_at: None,
+            confirmed_at: None,
             status: PaymentStatus::Created,
             payment_hash: None,
+            submitted_by: None,
         };
 
         env.storage().temporary().set(&intent_key, &intent);
@@ -394,6 +483,55 @@ impl CPayPayments {
         let key = DataKey::Intent(intent_id.clone());
         let mut intent = read_intent(&env, &intent_id)?;
 
+        // Guard: already confirmed – duplicate confirmation is not allowed.
+        if intent.status == PaymentStatus::Confirmed {
+            return Err(Error::DuplicateConfirmation);
+        }
+
+        // Only Created or Submitted intents can transition to Confirmed.
+        if intent.status != PaymentStatus::Created && intent.status != PaymentStatus::Submitted {
+            return Err(Error::InvalidStatus);
+        }
+
+        if intent.expires_at <= env.ledger().timestamp() {
+            return Err(Error::IntentExpired);
+        }
+
+        let now = env.ledger().timestamp();
+        intent.status = PaymentStatus::Confirmed;
+        intent.payment_hash = Some(payment_hash.clone());
+        intent.confirmed_at = Some(now);
+
+        env.storage().temporary().set(&key, &intent);
+        extend_temporary_ttl(&env, &key);
+        IntentConfirmed {
+            intent_id,
+            payment_hash,
+        }
+        .publish(&env);
+
+        Ok(intent)
+    }
+
+    /// Relayer marks a payment intent as submitted after it has broadcast the
+    /// corresponding Stellar payment but before the ledger has confirmed it.
+    /// This intermediate state lets operators distinguish "payment in flight"
+    /// from "payment not yet started" in reconciliation dashboards.
+    ///
+    /// Only the configured relayer may call this function.
+    /// Only `Created` intents may transition to `Submitted`.
+    pub fn mark_submitted(
+        env: Env,
+        intent_id: BytesN<32>,
+        payment_hash: BytesN<32>,
+    ) -> Result<PaymentIntent, Error> {
+        let config = read_config(&env)?;
+        config.relayer.require_auth();
+        require_not_paused_with_config(&env, &config)?;
+
+        let key = DataKey::Intent(intent_id.clone());
+        let mut intent = read_intent(&env, &intent_id)?;
+
         if intent.status != PaymentStatus::Created {
             return Err(Error::InvalidStatus);
         }
@@ -402,14 +540,86 @@ impl CPayPayments {
             return Err(Error::IntentExpired);
         }
 
-        intent.status = PaymentStatus::Confirmed;
+        let now = env.ledger().timestamp();
+        intent.status = PaymentStatus::Submitted;
+        intent.submitted_at = Some(now);
         intent.payment_hash = Some(payment_hash.clone());
+        intent.submitted_by = Some(config.relayer.clone());
 
         env.storage().temporary().set(&key, &intent);
         extend_temporary_ttl(&env, &key);
-        IntentConfirmed {
+        IntentSubmitted {
             intent_id,
+            submitted_by: config.relayer,
             payment_hash,
+        }
+        .publish(&env);
+
+        Ok(intent)
+    }
+
+    /// Admin function to explicitly transition an intent to `Expired` once its
+    /// `expires_at` timestamp has passed and no payment was confirmed.
+    ///
+    /// Intents that are already in a terminal state (`Confirmed`, `Cancelled`,
+    /// `Expired`, `ReconciliationNeeded`) cannot be expired again.
+    pub fn expire_intent(env: Env, intent_id: BytesN<32>) -> Result<PaymentIntent, Error> {
+        require_admin(&env)?;
+
+        let key = DataKey::Intent(intent_id.clone());
+        let mut intent = read_intent(&env, &intent_id)?;
+
+        if is_terminal(&intent.status) {
+            return Err(Error::AlreadyTerminal);
+        }
+
+        let now = env.ledger().timestamp();
+        if intent.expires_at > now {
+            return Err(Error::NotYetExpired);
+        }
+
+        intent.status = PaymentStatus::Expired;
+
+        env.storage().temporary().set(&key, &intent);
+        extend_temporary_ttl(&env, &key);
+        IntentExpired {
+            intent_id,
+            expired_at: now,
+        }
+        .publish(&env);
+
+        Ok(intent)
+    }
+
+    /// Admin function to flag an intent as needing manual reconciliation.
+    ///
+    /// Use this when the relayer submitted a Stellar payment but the on-chain
+    /// confirmation failed (e.g. wrong amount, wrong asset, network error),
+    /// leaving the intent stuck in `Submitted` state.
+    ///
+    /// Already terminal intents (`Confirmed`, `Expired`, `Cancelled`,
+    /// `ReconciliationNeeded`) cannot be flagged again.
+    pub fn mark_reconciliation_needed(
+        env: Env,
+        intent_id: BytesN<32>,
+        reason: soroban_sdk::String,
+    ) -> Result<PaymentIntent, Error> {
+        require_admin(&env)?;
+
+        let key = DataKey::Intent(intent_id.clone());
+        let mut intent = read_intent(&env, &intent_id)?;
+
+        if is_terminal(&intent.status) {
+            return Err(Error::AlreadyTerminal);
+        }
+
+        intent.status = PaymentStatus::ReconciliationNeeded;
+
+        env.storage().temporary().set(&key, &intent);
+        extend_temporary_ttl(&env, &key);
+        IntentReconciliationNeeded {
+            intent_id,
+            reason,
         }
         .publish(&env);
 
@@ -533,6 +743,16 @@ fn extend_temporary_ttl(env: &Env, key: &DataKey) {
         .extend_ttl(key, max_ttl / 2, max_ttl);
 }
 
+fn is_terminal(status: &PaymentStatus) -> bool {
+    matches!(
+        status,
+        PaymentStatus::Confirmed
+            | PaymentStatus::Expired
+            | PaymentStatus::Cancelled
+            | PaymentStatus::ReconciliationNeeded
+    )
+}
+
 #[cfg(test)]
 mod test {
     extern crate std;
@@ -542,6 +762,10 @@ mod test {
         testutils::{Address as _, Ledger as _},
         BytesN, Env,
     };
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
 
     fn id(env: &Env, byte: u8) -> BytesN<32> {
         BytesN::from_array(env, &[byte; 32])
@@ -569,6 +793,43 @@ mod test {
 
         (client, admin, token, relayer, merchant, payer)
     }
+
+    /// Register a merchant and create a fresh `Created` intent, returning
+    /// (intent_id, expires_at).
+    fn setup_intent<'a>(
+        env: &'a Env,
+        client: &CPayPaymentsClient<'a>,
+        mid: u8,
+        iid: u8,
+        merchant: &Address,
+        payer: &Address,
+    ) -> (BytesN<32>, u64) {
+        let merchant_id = id(env, mid);
+        let intent_id = id(env, iid);
+        let expires_at = env.ledger().timestamp() + 600;
+
+        client
+            .try_register_merchant(&merchant_id, merchant)
+            .unwrap()
+            .unwrap();
+        client
+            .try_create_intent(
+                payer,
+                &merchant_id,
+                &intent_id,
+                &100_i128,
+                &expires_at,
+                &id(env, 0xff),
+            )
+            .unwrap()
+            .unwrap();
+
+        (intent_id, expires_at)
+    }
+
+    // =========================================================================
+    // Existing baseline tests (kept, updated for new fields)
+    // =========================================================================
 
     #[test]
     fn registers_merchant_and_tracks_payment_intent() {
@@ -599,6 +860,10 @@ mod test {
 
         assert_eq!(intent.status, PaymentStatus::Created);
         assert_eq!(intent.amount, 100_0000000_i128);
+        // New fields initialised to None on creation.
+        assert_eq!(intent.submitted_at, None);
+        assert_eq!(intent.confirmed_at, None);
+        assert_eq!(intent.submitted_by, None);
 
         let confirmed = client
             .try_confirm_intent(&intent_id, &payment_hash)
@@ -607,6 +872,7 @@ mod test {
 
         assert_eq!(confirmed.status, PaymentStatus::Confirmed);
         assert_eq!(confirmed.payment_hash, Some(payment_hash));
+        assert!(confirmed.confirmed_at.is_some());
     }
 
     #[test]

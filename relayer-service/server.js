@@ -76,10 +76,14 @@ app.get('/', (_req, res) => {
       'POST /accounts/prepare',
       'POST /accounts/submit',
       'POST /contract/merchants/register',
+      'POST /merchants/send-contact-otp',
+      'POST /merchants/verify-contact-otp',
       'GET /contract/config',
       'POST /payments/intents/prepare',
       'POST /payments/intents/submit',
       'POST /payments/submit',
+      'POST /qr/issue',
+      'POST /qr/verify',
       'POST /add-money',
       'GET /tx/:hash',
     ],
@@ -121,6 +125,7 @@ app.get('/health', async (_req, res) => {
     cpayContractId: config.cpayContractId,
     tokenContractId: config.tokenContractId,
     sorobanRpcUrl: config.sorobanRpcUrl,
+    qrSigningConfigured: Boolean(config.qrSigningSecret),
     lowXlm,
     lowAsset,
     timestamp: new Date().toISOString(),
@@ -153,7 +158,7 @@ app.get('/account/:accountId/balance', async (req, res) => {
   });
 });
 
-app.post('/accounts/prepare', requireAuthenticatedUser, async (req, res) => {
+app.post('/accounts/prepare', requireAuthenticatedUser, requireWalletOwnership('accountId'), async (req, res) => {
   const accountId = assertAccountId(req.body.accountId, 'accountId');
   const status = await getAccountStatus(accountId);
 
@@ -231,7 +236,7 @@ app.get('/contract/config', async (_req, res) => {
   });
 });
 
-app.post('/contract/merchants/register', requireAuthenticatedUser, async (req, res) => {
+app.post('/contract/merchants/register', requireAuthenticatedUser, requireMerchantOwnership('walletAddress'), async (req, res) => {
   assertContractFlowEnabled();
   assertContractAdminConfigured();
 
@@ -247,7 +252,7 @@ app.post('/contract/merchants/register', requireAuthenticatedUser, async (req, r
   });
 });
 
-app.post('/payments/intents/prepare', requireAuthenticatedUser, async (req, res) => {
+app.post('/payments/intents/prepare', requireAuthenticatedUser, requireWalletOwnership('payer'), async (req, res) => {
   assertContractFlowEnabled();
 
   const payer = assertAccountId(req.body.payer, 'payer');
@@ -436,7 +441,7 @@ app.post('/payments/submit', requireAuthenticatedUser, async (req, res) => {
   res.json(response);
 });
 
-app.post('/add-money', requireAuthenticatedUser, async (req, res) => {
+app.post('/add-money', requireAuthenticatedUser, requireWalletOwnership('accountId'), async (req, res) => {
   if (!config.addMoneyEnabled) {
     return res.status(403).json({
       error: 'Add Money is disabled for this network',
@@ -577,6 +582,8 @@ const relayerHttpServer = app.listen(PORT, '0.0.0.0', () => {
 });
 relayerHttpServer.ref();
 
+module.exports = { app, server: relayerHttpServer };
+
 function loadConfig() {
   const networkName = (process.env.STELLAR_NETWORK || 'testnet').toLowerCase();
   const network = NETWORKS[networkName] || NETWORKS.testnet;
@@ -662,6 +669,9 @@ function loadConfig() {
     contractAdminSecret,
     contractFlowEnabled,
     contractIntentTtlSeconds: Number(process.env.CONTRACT_INTENT_TTL_SECONDS || 600),
+    // QR signing – optional but recommended for production
+    qrSigningSecret: process.env.QR_SIGNING_SECRET || '',
+    qrDefaultTtlSeconds: Number(process.env.QR_DEFAULT_TTL_SECONDS || 86400),
   };
 }
 
@@ -672,6 +682,49 @@ function readBooleanEnv(name, defaultValue) {
   }
 
   return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
+}
+
+/**
+ * Sign a v3 QR payload using HMAC-SHA256.
+ *
+ * The signature is over the canonical JSON representation of all fields
+ * except `sig` itself.  This determin istic order prevents signature
+ * mismatches from field reordering.
+ */
+function signQRPayload(unsignedPayload) {
+  // Build the canonical payload with fields in sorted order, excluding `sig`.
+  const canonical = {
+    type: unsignedPayload.type,
+    version: unsignedPayload.version,
+    requestId: unsignedPayload.requestId,
+    nonce: unsignedPayload.nonce,
+    network: unsignedPayload.network,
+    merchantId: unsignedPayload.merchantId,
+    merchant: unsignedPayload.merchant,
+    assetCode: unsignedPayload.assetCode,
+    assetIssuer: unsignedPayload.assetIssuer,
+    amount: unsignedPayload.amount,
+    name: unsignedPayload.name,
+    ...(unsignedPayload.note ? { note: unsignedPayload.note } : {}),
+    issuedAt: unsignedPayload.issuedAt,
+    expiresAt: unsignedPayload.expiresAt,
+  };
+
+  const canonicalString = JSON.stringify(canonical);
+  const hmac = crypto.createHmac('sha256', config.qrSigningSecret);
+  hmac.update(canonicalString);
+  return hmac.digest('hex');
+}
+
+/**
+ * Timing-safe comparison of two hex strings.
+ * Prevents timing attacks on signature verification.
+ */
+function timingSafeEqual(a, b) {
+  const aBuf = Buffer.from(a, 'hex');
+  const bBuf = Buffer.from(b, 'hex');
+  if (aBuf.length !== bBuf.length) return false;
+  return crypto.timingSafeEqual(aBuf, bBuf);
 }
 
 function requireEnv(name) {
@@ -709,6 +762,137 @@ async function requireAuthenticatedUser(req, res, next) {
       code: 'AUTH_REQUIRED',
     });
   }
+}
+
+/**
+ * Resolve the wallet address(es) that belong to an authenticated Supabase user.
+ * Returns an array of wallet_address strings from the users table.
+ * Returns null when persistence is not configured (ownership check is skipped).
+ */
+async function resolveUserWallets(authUid) {
+  if (!isSupabasePersistenceEnabled()) {
+    return null;
+  }
+
+  try {
+    const query = new URLSearchParams({
+      select: 'wallet_address',
+      auth_user_id: `eq.${authUid}`,
+    });
+    const rows = await supabaseRestRequest(`users?${query.toString()}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (!Array.isArray(rows)) {
+      return null;
+    }
+    return rows.map(r => r.wallet_address).filter(Boolean);
+  } catch (error) {
+    console.warn('Wallet ownership lookup failed:', error.message);
+    return null;
+  }
+}
+
+/**
+ * Build a middleware that verifies the requesting user owns the wallet
+ * identified by `walletField` in req.body.
+ *
+ * When auth is disabled or Supabase persistence is not configured the check
+ * is skipped so local development continues to work without a Supabase project.
+ *
+ * @param {string} walletField - The req.body key that holds the wallet address.
+ */
+function requireWalletOwnership(walletField) {
+  return async function (req, res, next) {
+    if (!config.authRequired) {
+      return next();
+    }
+
+    const authUid = req.auth && req.auth.sub;
+    if (!authUid) {
+      return res.status(401).json({
+        error: 'Authentication required',
+        code: 'AUTH_REQUIRED',
+      });
+    }
+
+    const requestedWallet = req.body && req.body[walletField];
+    if (!requestedWallet) {
+      return next();
+    }
+
+    const ownedWallets = await resolveUserWallets(authUid);
+
+    // When Supabase persistence is not configured, skip the ownership check.
+    if (ownedWallets === null) {
+      return next();
+    }
+
+    if (!ownedWallets.includes(requestedWallet)) {
+      return res.status(403).json({
+        error: 'You are not authorized to perform actions for this wallet',
+        code: 'WALLET_OWNERSHIP_DENIED',
+      });
+    }
+
+    return next();
+  };
+}
+
+/**
+ * Build a middleware that verifies the requesting user owns the merchant
+ * identified by `merchantWalletField` in req.body, by checking the merchants
+ * table for a row matching both auth_user_id and wallet_address.
+ *
+ * @param {string} merchantWalletField - The req.body key that holds the merchant wallet address.
+ */
+function requireMerchantOwnership(merchantWalletField) {
+  return async function (req, res, next) {
+    if (!config.authRequired) {
+      return next();
+    }
+
+    const authUid = req.auth && req.auth.sub;
+    if (!authUid) {
+      return res.status(401).json({
+        error: 'Authentication required',
+        code: 'AUTH_REQUIRED',
+      });
+    }
+
+    const requestedWallet = req.body && req.body[merchantWalletField];
+    if (!requestedWallet) {
+      return next();
+    }
+
+    if (!isSupabasePersistenceEnabled()) {
+      return next();
+    }
+
+    try {
+      const query = new URLSearchParams({
+        select: 'wallet_address',
+        auth_user_id: `eq.${authUid}`,
+        wallet_address: `eq.${requestedWallet}`,
+        limit: '1',
+      });
+      const rows = await supabaseRestRequest(`merchants?${query.toString()}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return res.status(403).json({
+          error: 'You are not authorized to register a merchant for this wallet',
+          code: 'MERCHANT_OWNERSHIP_DENIED',
+        });
+      }
+    } catch (error) {
+      console.warn('Merchant ownership lookup failed, skipping check:', error.message);
+    }
+
+    return next();
+  };
 }
 
 async function verifySupabaseJwt(authorizationHeader) {
@@ -970,6 +1154,120 @@ function assertContractAdminConfigured() {
     error.statusCode = 503;
     error.code = 'CONTRACT_ADMIN_NOT_CONFIGURED';
     throw error;
+  }
+}
+
+function assertSupabasePersistenceConfigured(endpoint) {
+  if (!isSupabasePersistenceEnabled()) {
+    const error = new Error(
+      `${endpoint} requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to be configured on the relayer`
+    );
+    error.statusCode = 503;
+    error.code = 'SUPABASE_NOT_CONFIGURED';
+    throw error;
+  }
+}
+
+function assertNonEmptyString(value, label) {
+  if (typeof value !== 'string' || !value.trim()) {
+    const error = new Error(`${label} is required and must be a non-empty string`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return value.trim();
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+/**
+ * Fetch a merchant row only when the given authUserId is the owner.
+ * Returns null when the merchant is not found or the user does not own it.
+ */
+async function fetchMerchantForOwner(merchantId, authUserId) {
+  try {
+    const rows = await supabaseRestRequest(
+      `merchants?id=eq.${encodeURIComponent(merchantId)}&auth_user_id=eq.${encodeURIComponent(authUserId)}&select=id,auth_user_id,verification_status`,
+      { method: 'GET', headers: { 'Accept': 'application/json', Prefer: 'return=representation' } }
+    );
+    return Array.isArray(rows) ? rows[0] || null : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Upsert a merchant_contact_verifications row after an OTP send request.
+ */
+async function upsertMerchantContactVerification({ authUserId, merchantId, contactEmail }) {
+  try {
+    await supabaseRestRequest(
+      'merchant_contact_verifications',
+      {
+        method: 'POST',
+        headers: {
+          Prefer: 'resolution=merge-duplicates,return=minimal',
+          'on-conflict': 'auth_user_id,merchant_id',
+        },
+        body: JSON.stringify({
+          auth_user_id: authUserId,
+          merchant_id: merchantId,
+          contact_email: contactEmail,
+          otp_sent_at: new Date().toISOString(),
+          is_verified: false,
+          verified_at: null,
+        }),
+      }
+    );
+  } catch (err) {
+    // Non-fatal — audit record failure should not block the OTP send response.
+    console.warn('Failed to upsert merchant_contact_verifications:', err.message);
+  }
+}
+
+/**
+ * Mark contact email as verified on the merchants row and the
+ * merchant_contact_verifications audit row.
+ */
+async function updateMerchantContactVerified({ merchantId, contactEmail, authUserId, newVerificationStatus }) {
+  const now = new Date().toISOString();
+
+  const merchantPatch = {
+    contact_email_verified: true,
+    verified_contact_email: contactEmail,
+    updated_at: now,
+  };
+  if (newVerificationStatus) {
+    merchantPatch.verification_status = newVerificationStatus;
+    merchantPatch.submitted_at = now;
+  }
+
+  await supabaseRestRequest(
+    `merchants?id=eq.${encodeURIComponent(merchantId)}&auth_user_id=eq.${encodeURIComponent(authUserId)}`,
+    {
+      method: 'PATCH',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify(merchantPatch),
+    }
+  );
+
+  // Update audit row
+  try {
+    await supabaseRestRequest(
+      `merchant_contact_verifications?merchant_id=eq.${encodeURIComponent(merchantId)}&auth_user_id=eq.${encodeURIComponent(authUserId)}`,
+      {
+        method: 'PATCH',
+        headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify({
+          is_verified: true,
+          verified_at: now,
+          updated_at: now,
+        }),
+      }
+    );
+  } catch (err) {
+    console.warn('Failed to update merchant_contact_verifications after OTP verify:', err.message);
   }
 }
 

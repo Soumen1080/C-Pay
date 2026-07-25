@@ -112,6 +112,10 @@ const getAddMoneyErrorMessage = (error: unknown): string => {
     return 'Pilot credit claims are disabled for this network.';
   }
 
+  if (code === 'WALLET_OWNERSHIP_DENIED') {
+    return 'Your wallet does not match your account. Sign out, sign back in, and try again.';
+  }
+
   if (code === 'RELAYER_TIMEOUT' || lowerMessage.includes('taking too long')) {
     return 'Payment service is taking too long to respond. Please try again.';
   }

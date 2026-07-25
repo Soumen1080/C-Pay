@@ -16,6 +16,8 @@ export type PaymentFailureCopy = {
 // Error codes / signals that a plain retry will not resolve.
 const SUPPORT_CODES = new Set([
   'AUTH_REQUIRED',
+  'WALLET_OWNERSHIP_DENIED',
+  'MERCHANT_OWNERSHIP_DENIED',
   'CONTRACT_MERCHANT_MISSING',
   'CONTRACT_MERCHANT_INACTIVE',
   'CONTRACT_MERCHANT_MISMATCH',
@@ -62,6 +64,22 @@ const buildFailureCopy = (error: any): Omit<PaymentFailureCopy, 'category'> => {
     return {
       errorMessage: 'Session Expired',
       errorReason: 'Your email session expired before the payment could be submitted. Sign in again, then retry the payment.',
+      errorCode,
+    };
+  }
+
+  if (errorCode === 'WALLET_OWNERSHIP_DENIED') {
+    return {
+      errorMessage: 'Wallet Not Recognised',
+      errorReason: 'The payment was sent from a wallet that does not match your account. Sign out, sign back in, and try again.',
+      errorCode,
+    };
+  }
+
+  if (errorCode === 'MERCHANT_OWNERSHIP_DENIED') {
+    return {
+      errorMessage: 'Merchant Not Authorised',
+      errorReason: 'The merchant wallet used in this request does not belong to your account. Sign out, sign back in, and try again.',
       errorCode,
     };
   }
