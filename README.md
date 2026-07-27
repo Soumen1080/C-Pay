@@ -17,17 +17,11 @@
 _No crypto knowledge required_
 
 <p align="center">
-  <a href="https://expo.dev/accounts/soumen0818/projects/cryptopay/builds/8e46dd81-b007-4299-a323-e3593bab88ff">
-    <img src="https://img.shields.io/badge/Download%20APK-Android-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Download APK" />
+  <a href="#-download-apk">
+    <img src="https://img.shields.io/badge/Build%20APK-Android-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Build APK" />
   </a>
-  <a href="https://drive.google.com/file/d/1zgbPvRwF3VkCLIEbEEtYytIfsTtc5jrg/view?usp=sharing">
-    <img src="https://img.shields.io/badge/Demo%20Video-Watch-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="Demo Video" />
-  </a>
-  <a href="https://forms.gle/dTGDtMPoZUSMygea9">
-    <img src="https://img.shields.io/badge/Give%20Feedback-Form-673AB7?style=for-the-badge&logo=googleforms&logoColor=white" alt="Give Feedback" />
-  </a>
-  <a href="https://docs.google.com/spreadsheets/d/1JQ_7-KpTUSlvj9x1c5fqgbnhFPx8JfYAEWUcYOchnA0/edit?usp=sharing">
-    <img src="https://img.shields.io/badge/Feedback%20Sheet-Google-4285F4?style=for-the-badge&logo=googlesheets&logoColor=white" alt="Feedback Sheet" />
+  <a href="https://github.com/soumen0818/C-Pay/issues">
+    <img src="https://img.shields.io/badge/Give%20Feedback-GitHub-673AB7?style=for-the-badge&logo=github&logoColor=white" alt="Give Feedback" />
   </a>
 </p>
 
@@ -42,7 +36,7 @@ _No crypto knowledge required_
 
 - [Overview](#-overview)
 - [Download APK](#-download-apk)
-- [Feedback Responses](#-feedback-responses)
+- [Pilot Feedback Summary](#-pilot-feedback-summary)
 - [App Screenshots](#-app-screenshots)
 - [Current Testnet Values](#-current-testnet-values)
 - [Vision](#-vision)
@@ -176,47 +170,31 @@ The production Android profile creates a release APK. iOS builds are separate ar
 
 ---
 
-## 📝 Feedback Responses
+## 📝 Pilot Feedback Summary
 
-Want to try C-Pay and share feedback? Fill out the [C-Pay feedback form](https://forms.gle/dTGDtMPoZUSMygea9).
+C-Pay completed a closed testnet pilot with a small group of users. Feedback was collected through a private form and is summarized below without identifying information.
 
-Live response sheet: [C-Pay feedback responses](https://docs.google.com/spreadsheets/d/1JQ_7-KpTUSlvj9x1c5fqgbnhFPx8JfYAEWUcYOchnA0/edit?usp=sharing)
+### Aggregate Results
 
-### Table 1: Pilot Users
+| Metric | Result |
+| --- | --- |
+| Pilot users | 6 |
+| Average satisfaction | 9.7 / 10 |
+| Average recommendation | 4.8 / 5 |
+| Bug reports | 1 (media-library permission in Expo Go) |
+| Most requested feature | Withdrawal support |
+| UI suggestions | Dark theme default, more prominent wallet address |
 
-| User Name | User Email | User Wallet Address |
-| --- | --- | --- |
-| SHAMPA DAS | dasshampa2022@gmail.com | `GCXPJ4SJDOSM6IGJPSFUWC4QQMA33S6M456TC32RU2LZ65OJHKD7YWVC` |
-| soumen mandal | soumenmandal1080@gmail.com | `GBGJS2UIEF2DYN3L67P2A7X62M4WK72JGTF7ABCOQL75UYHMWYLFRI4S` |
-| SUMAN PRADHAN | prasuman01@gamil.com | `GCIVVA5M5WCBTWZ4AXBX6W4THTXAHHCUP27VFQIIVTGU7HLLLODZ6AXH` |
-| sam mandal | kinemaster1444@gmail.com | `GBGJS2UIEF2DYN3L67P2A7X62M4WK72JGTF7ABCOQL75UYHMWYLFRI4S` |
-| Arka Dash | dasharka05@gmail.com | `GAD3FPRJ7K2FFX7JBRIITVJP2A4OLIO4M3AKABEF4HFG732RESVFYV6K` |
-| Souvik Mandal | souvikmandals10@gmail.com | `GAKUELFFUKSAJMTECN2SVXDRJOUJXDE27OPTD57SA65KJ6AU32SXKF27` |
+### Key Themes
 
-### Table 2: User Feedback Implementation
-
-| User Name | User Email | User Wallet Address | User Feedback | Commit ID |
-| --- | --- | --- | --- | --- |
-| SHAMPA DAS | dasshampa2022@gmail.com | `GCXPJ4SJDOSM6IGJPSFUWC4QQMA33S6M456TC32RU2LZ65OJHKD7YWVC` | There is no withdrawal option. | [b701f6f](https://github.com/soumen0818/C-Pay/commit/b701f6f513e9df6bd83276b53c83470f36900493) |
-| soumen mandal | soumenmandal1080@gmail.com | `GBGJS2UIEF2DYN3L67P2A7X62M4WK72JGTF7ABCOQL75UYHMWYLFRI4S` | create a StartUp use this | `N/A` |
-| SUMAN PRADHAN | prasuman01@gamil.com | `GCIVVA5M5WCBTWZ4AXBX6W4THTXAHHCUP27VFQIIVTGU7HLLLODZ6AXH` | No change requested. | `N/A` |
-| sam mandal | kinemaster1444@gmail.com | `GBGJS2UIEF2DYN3L67P2A7X62M4WK72JGTF7ABCOQL75UYHMWYLFRI4S` | No written feedback provided. | `N/A` |
-| Arka Dash | dasharka05@gmail.com | `GAD3FPRJ7K2FFX7JBRIITVJP2A4OLIO4M3AKABEF4HFG732RESVFYV6K` | Make the dark theme default and make the wallet address more obvious. Otherwise it was a great experience. | [a192c5f](https://github.com/soumen0818/C-Pay/commit/a192c5fc81b98707b3b5ca74c9cec345605b3724) |
-| Souvik Mandal | souvikmandals10@gmail.com | `GAKUELFFUKSAJMTECN2SVXDRJOUJXDE27OPTD57SA65KJ6AU32SXKF27` | Overall app experience is good. But suggestions will be more on UI perspective. | [3e1b812](https://github.com/soumen0818/C-Pay/commit/3e1b812cd671fc495df4fbcb194d452b898b0619) |
+- **Withdrawal support** is the most requested feature; it is planned for a future production phase after real-money compliance and banking approvals are in place.
+- **Dark theme default** and **wallet address visibility** were requested for the home/profile screens.
+- **Overall experience** was rated highly across sending, receiving, balance checks, and QR flows.
+- **Media-library permission** error was reported in Expo Go and resolved by building a development/production APK.
 
 > **Withdrawal note:** Withdrawal is planned as a future implementation because it requires real-money interaction, banking/payment authority approval, compliance review, and proper mentoring before production rollout. The current C-Pay app is a closed-pilot Stellar testnet app, so pilot credits have no real cash value.
 
-
-### Full Feedback Response Export
-
-| # | Timestamp | Full Name | Form Email | Provided Email | Wallet Address | Overall Satisfaction | UI | Speed | Security | Transaction Reliability | Support | Most Used Features | Bug Reported | Issue Details | Recommend Rating | Suggestions |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 28/04/2026 10:44:06 | SHAMPA DAS | dasshampa2022@gmail.com | dasshampa2022@gmail.com | `GCXPJ4SJDOSM6IGJPSFUWC4QQMA33S6M456TC32RU2LZ65OJHKD7YWVC` | 10 | Good (3) | Fair (2) | Excellent (4) | Excellent (4) | Fair (2) | Sending Funds, In-App Crypto Exchange/Swap | No |  | 4 | There is no withdrawal option |
-| 2 | 28/04/2026 12:38:54 | soumen mandal | soumenmandal1080@gmail.com | soumenmandal1080@gmail.com | `GBGJS2UIEF2DYN3L67P2A7X62M4WK72JGTF7ABCOQL75UYHMWYLFRI4S` | 10 | Excellent (4) | Excellent (4) | Excellent (4) | Excellent (4) | Excellent (4) | Sending Funds, Receiving Funds, Checking Balance/History, Staking/Yield Programs, In-App Crypto Exchange/Swap, Other (Please specify below) | No | NaN | 5 | create a StartUp use this |
-| 3 | 28/04/2026 18:24:02 | SUMAN PRADHAN | pradhan.1.7.2006@gmail.com | prasuman01@gamil.com | `GCIVVA5M5WCBTWZ4AXBX6W4THTXAHHCUP27VFQIIVTGU7HLLLODZ6AXH` | 10 | Excellent (4) | Excellent (4) | Excellent (4) | Excellent (4) | Excellent (4) | Sending Funds, Receiving Funds, Checking Balance/History, Staking/Yield Programs, In-App Crypto Exchange/Swap, Other (Please specify below) | No |  | 5 | No |
-| 4 | 28/04/2026 19:25:57 | sam mandal | kinemaster1444@gmail.com | kinemaster1444@gmail.com | `GBGJS2UIEF2DYN3L67P2A7X62M4WK72JGTF7ABCOQL75UYHMWYLFRI4S` | 10 | Excellent (4) | Excellent (4) | Excellent (4) | Excellent (4) | Excellent (4) | Sending Funds, Receiving Funds, Checking Balance/History, Staking/Yield Programs, In-App Crypto Exchange/Swap, Other (Please specify below) | No | NaN | 5 |  |
-| 5 | 28/04/2026 21:39:04 | Arka Dash | dasharka05@gmail.com | dasharka05@gmail.com | `GAD3FPRJ7K2FFX7JBRIITVJP2A4OLIO4M3AKABEF4HFG732RESVFYV6K` | 10 | Excellent (4) | Excellent (4) | Excellent (4) | Excellent (4) | Excellent (4) | Sending Funds, Receiving Funds, Checking Balance/History, Staking/Yield Programs, In-App Crypto Exchange/Swap | No |  | 5 | Make the dark theme default & Make the wallet address more obvious<br>Otherwise it was a great experience!! |
-| 6 | 29/04/2026 10:14:24 | Souvik Mandal | souvikmandals10@gmail.com | souvikmandals10@gmail.com | `GAKUELFFUKSAJMTECN2SVXDRJOUJXDE27OPTD57SA65KJ6AU32SXKF27` | 8 | Fair (2) | Good (3) | Good (3) | Good (3) | Good (3) | Sending Funds, Receiving Funds, Checking Balance/History | Yes |  | 5 | Overall app experience is good. But suggestions will be more on UI perspective. |
+Have feedback? Open an [issue](https://github.com/soumen0818/C-Pay/issues) or start a [discussion](https://github.com/soumen0818/C-Pay/discussions).
 
 ---
 
@@ -980,16 +958,10 @@ EXPO_PUBLIC_DEV_PHONE=+911234567890
 EXPO_PUBLIC_DEV_OTP=123456
 ```
 
-For your current Wi-Fi output, the phone-reachable local relayer URL is:
+Find your laptop's LAN IP and use it in `App/.env`:
 
 ```text
-http://172.29.78.86:3000
-```
-
-Use it in `App/.env`:
-
-```text
-EXPO_PUBLIC_STELLAR_RELAYER_URL=http://172.29.78.86:3000
+EXPO_PUBLIC_STELLAR_RELAYER_URL=http://<your-laptop-lan-ip>:3000
 ```
 
 Restart Expo after changing env:
@@ -1440,10 +1412,10 @@ Use:
 http://<your laptop LAN IP>:3000/health
 ```
 
-For your shown Wi-Fi IP:
+For example, if your laptop LAN IP is `192.168.1.100`:
 
 ```text
-http://172.29.78.86:3000/health
+http://192.168.1.100:3000/health
 ```
 
 ---
@@ -1516,7 +1488,7 @@ Check:
 For a real phone, avoid `localhost`. Use your laptop IP, for example:
 
 ```text
-EXPO_PUBLIC_STELLAR_RELAYER_URL=http://172.29.78.86:3000
+EXPO_PUBLIC_STELLAR_RELAYER_URL=http://<your-laptop-lan-ip>:3000
 ```
 
 </details>
@@ -1608,7 +1580,7 @@ npm run build:android:production-apk
 
 Check:
 
-- `EXPO_PUBLIC_CPINR_ASSET_ISSUER` equals `GA2SFZ4GJVMLPULSJMTY7RMIOPQD5W5JGTDSD3N7I2PR5KZRFGPQF5BJ`.
+- `EXPO_PUBLIC_CPINR_ASSET_ISSUER` matches the issuer configured in your `.env`.
 - User account exists on Stellar.
 - User account has a CPINR trustline.
 - Relayer `/account/<wallet>/balance` returns a CPINR balance.
