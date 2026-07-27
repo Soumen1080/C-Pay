@@ -1,0 +1,102 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in C-Pay
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please fill out the sections below so we can reproduce and fix the issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of what the bug is.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Step-by-step instructions to reproduce the behavior.
+      placeholder: |
+        1. Open the app
+        2. Go to '...'
+        3. Tap on '...'
+        4. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of C-Pay is affected?
+      options:
+        - Mobile App (Onboarding/Auth)
+        - Mobile App (Payments/Wallet)
+        - Mobile App (Merchant)
+        - Relayer Service
+        - Soroban Contract
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: App Version
+      description: "The C-Pay app version (if applicable)."
+      placeholder: "e.g. 1.0.3"
+
+  - type: dropdown
+    id: network
+    attributes:
+      label: Network
+      description: Which Stellar network?
+      options:
+        - Testnet
+        - Public
+        - N/A
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Device, OS, Expo SDK version, or any other environment details.
+      placeholder: |
+        - Device: Pixel 7
+        - OS: Android 14
+        - Expo SDK: 54
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: Paste any relevant console output, error messages, or screenshots.
+      render: shell
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other context about the problem.
