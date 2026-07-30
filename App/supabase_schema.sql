@@ -134,6 +134,13 @@ CREATE TABLE IF NOT EXISTS relayer_idempotency_keys (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS contract_intent_cache (
+    intent_id TEXT PRIMARY KEY,
+    data JSONB NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS wallet_backups (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     auth_user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -219,6 +226,7 @@ CREATE INDEX IF NOT EXISTS idx_merchant_qr_codes_merchant_id ON merchant_qr_code
 CREATE INDEX IF NOT EXISTS idx_add_money_claims_wallet_address ON add_money_claims(wallet_address);
 CREATE INDEX IF NOT EXISTS idx_add_money_claims_claimed_at ON add_money_claims(claimed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_relayer_idempotency_expires_at ON relayer_idempotency_keys(expires_at);
+CREATE INDEX IF NOT EXISTS idx_contract_intent_cache_expires_at ON contract_intent_cache(expires_at);
 CREATE INDEX IF NOT EXISTS idx_wallet_backups_auth_user_id ON wallet_backups(auth_user_id);
 CREATE INDEX IF NOT EXISTS idx_wallet_backups_wallet_address ON wallet_backups(wallet_address);
 
@@ -259,6 +267,7 @@ ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE merchant_qr_codes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE add_money_claims ENABLE ROW LEVEL SECURITY;
 ALTER TABLE relayer_idempotency_keys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE contract_intent_cache ENABLE ROW LEVEL SECURITY;
 ALTER TABLE wallet_backups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE merchant_contact_verifications ENABLE ROW LEVEL SECURITY;
 
@@ -544,9 +553,11 @@ WITH CHECK (
 DROP POLICY IF EXISTS "add_money_claims_service_select" ON add_money_claims;
 
 DROP POLICY IF EXISTS "relayer_idempotency_service_select" ON relayer_idempotency_keys;
+DROP POLICY IF EXISTS "contract_intent_cache_service_select" ON contract_intent_cache;
 
 REVOKE ALL ON add_money_claims FROM anon, authenticated;
 REVOKE ALL ON relayer_idempotency_keys FROM anon, authenticated;
+REVOKE ALL ON contract_intent_cache FROM anon, authenticated;
 
 DROP POLICY IF EXISTS "wallet_backups_select_own" ON wallet_backups;
 CREATE POLICY "wallet_backups_select_own" ON wallet_backups

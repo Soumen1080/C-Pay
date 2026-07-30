@@ -326,7 +326,7 @@ app.post('/payments/intents/prepare', requireAuthenticatedUser, requireWalletOwn
     status: 'prepared',
   };
 
-  cacheContractIntent(intentId, cachedIntent);
+  await cacheContractIntent(intentId, cachedIntent);
 
   res.json({
     intentId,
@@ -349,7 +349,7 @@ app.post('/payments/intents/submit', requireAuthenticatedUser, async (req, res) 
   const intentId = normalizeIntentId(req.body.intentId);
   const signedXdr = assertTransactionEnvelopeXdr(req.body.signedXdr);
   const transaction = StellarSdk.TransactionBuilder.fromXDR(signedXdr, config.passphrase);
-  const cachedIntent = contractIntentCache.get(intentId);
+  const cachedIntent = await getCachedContractIntent(intentId);
 
   if (cachedIntent && transaction.source !== cachedIntent.payer) {
     return res.status(400).json({
@@ -367,7 +367,7 @@ app.post('/payments/intents/submit', requireAuthenticatedUser, async (req, res) 
     createLedger: result.ledger,
   };
 
-  cacheContractIntent(intentId, createdIntent);
+  await cacheContractIntent(intentId, createdIntent);
 
   res.json({
     status: 'success',
@@ -383,8 +383,11 @@ app.post('/payments/submit', requireAuthenticatedUser, async (req, res) => {
   const idempotencyKey = normalizeOptionalString(req.body.idempotencyKey);
   const intentId = normalizeOptionalIntentId(req.body.intentId);
 
-  if (idempotencyKey && idempotencyCache.has(idempotencyKey)) {
-    return res.json(idempotencyCache.get(idempotencyKey));
+  if (idempotencyKey) {
+    const cached = await getIdempotencyResponse(idempotencyKey);
+    if (cached) {
+      return res.json(cached);
+    }
   }
 
   const innerTransaction = StellarSdk.TransactionBuilder.fromXDR(signedXdr, config.passphrase);
@@ -434,8 +437,7 @@ app.post('/payments/submit', requireAuthenticatedUser, async (req, res) => {
   };
 
   if (idempotencyKey) {
-    idempotencyCache.set(idempotencyKey, response);
-    setTimeout(() => idempotencyCache.delete(idempotencyKey), config.idempotencyTtlMs).unref();
+    await setIdempotencyResponse(idempotencyKey, response, config.idempotencyTtlMs);
   }
 
   res.json(response);
@@ -453,8 +455,11 @@ app.post('/add-money', requireAuthenticatedUser, requireWalletOwnership('account
   const amount = normalizeAmount(req.body.amount || config.addMoneyAmount, config.maxAddMoneyAmount);
   const idempotencyKey = normalizeOptionalString(req.body.idempotencyKey);
 
-  if (idempotencyKey && idempotencyCache.has(idempotencyKey)) {
-    return res.json(idempotencyCache.get(idempotencyKey));
+  if (idempotencyKey) {
+    const cached = await getIdempotencyResponse(idempotencyKey);
+    if (cached) {
+      return res.json(cached);
+    }
   }
 
   const status = await getAccountStatus(accountId);
@@ -520,8 +525,7 @@ app.post('/add-money', requireAuthenticatedUser, requireWalletOwnership('account
   });
 
   if (idempotencyKey) {
-    idempotencyCache.set(idempotencyKey, response);
-    setTimeout(() => idempotencyCache.delete(idempotencyKey), config.idempotencyTtlMs).unref();
+    await setIdempotencyResponse(idempotencyKey, response, config.idempotencyTtlMs);
   }
 
   res.json(response);
@@ -581,6 +585,11 @@ const relayerHttpServer = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Distribution: ${distributionKeypair.publicKey()}`);
 });
 relayerHttpServer.ref();
+
+// Clean up expired persisted state on startup (non-blocking)
+cleanExpiredPersistedState().catch(err => {
+  console.error('Startup cleanup of persisted state failed:', err.message);
+});
 
 module.exports = { app, server: relayerHttpServer };
 
@@ -1458,7 +1467,7 @@ async function registerMerchantOnContract(merchantId, walletAddress) {
 }
 
 async function verifyPaymentMatchesContractIntent(intentId, payment) {
-  const cachedIntent = contractIntentCache.get(intentId);
+  const cachedIntent = await getCachedContractIntent(intentId);
   const contractIntent = cachedIntent?.status === 'created'
     ? cachedIntent
     : await readContractIntent(intentId);
@@ -1509,9 +1518,9 @@ async function confirmContractIntent(intentId, paymentHash) {
     bytes32ScVal(paymentHash),
   ]);
 
-  const cachedIntent = contractIntentCache.get(intentId);
+  const cachedIntent = await getCachedContractIntent(intentId);
   if (cachedIntent) {
-    cacheContractIntent(intentId, {
+    await cacheContractIntent(intentId, {
       ...cachedIntent,
       status: 'confirmed',
       paymentHash,
@@ -1528,9 +1537,8 @@ async function confirmContractIntent(intentId, paymentHash) {
   };
 }
 
-function cacheContractIntent(intentId, value) {
-  contractIntentCache.set(intentId, value);
-  setTimeout(() => contractIntentCache.delete(intentId), config.contractIntentTtlSeconds * 1000).unref();
+async function cacheContractIntent(intentId, value) {
+  await setCachedContractIntent(intentId, value, config.contractIntentTtlSeconds);
 }
 
 async function getBalances(accountId) {
@@ -1652,6 +1660,119 @@ async function recordAddMoneyClaim({
 
 function isSupabasePersistenceEnabled() {
   return Boolean(config.supabaseUrl && config.supabaseServiceRoleKey);
+}
+
+// ── Persisted idempotency ──────────────────────────────────────────────
+
+async function getIdempotencyResponse(key) {
+  if (idempotencyCache.has(key)) return idempotencyCache.get(key);
+  if (!isSupabasePersistenceEnabled()) return null;
+  try {
+    const query = new URLSearchParams({
+      select: 'response',
+      key: `eq.${key}`,
+      expires_at: `gt.${new Date().toISOString()}`,
+      limit: '1',
+    });
+    const rows = await supabaseRestRequest(`relayer_idempotency_keys?${query.toString()}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (Array.isArray(rows) && rows.length > 0) {
+      idempotencyCache.set(key, rows[0].response);
+      setTimeout(() => idempotencyCache.delete(key), config.idempotencyTtlMs).unref();
+      return rows[0].response;
+    }
+  } catch (error) {
+    console.warn('Idempotency lookup failed:', error.message);
+  }
+  return null;
+}
+
+async function setIdempotencyResponse(key, response, ttlMs) {
+  idempotencyCache.set(key, response);
+  setTimeout(() => idempotencyCache.delete(key), ttlMs).unref();
+  if (!isSupabasePersistenceEnabled()) return;
+  try {
+    await supabaseRestRequest('relayer_idempotency_keys', {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({
+        key,
+        response,
+        expires_at: new Date(Date.now() + ttlMs).toISOString(),
+      }),
+    });
+  } catch (error) {
+    console.warn('Idempotency persistence failed:', error.message);
+  }
+}
+
+// ── Persisted contract intent cache ────────────────────────────────────
+
+async function getCachedContractIntent(intentId) {
+  if (contractIntentCache.has(intentId)) return contractIntentCache.get(intentId);
+  if (!isSupabasePersistenceEnabled()) return null;
+  try {
+    const query = new URLSearchParams({
+      select: 'data',
+      intent_id: `eq.${intentId}`,
+      expires_at: `gt.${new Date().toISOString()}`,
+      limit: '1',
+    });
+    const rows = await supabaseRestRequest(`contract_intent_cache?${query.toString()}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (Array.isArray(rows) && rows.length > 0) {
+      const data = rows[0].data;
+      contractIntentCache.set(intentId, data);
+      setTimeout(() => contractIntentCache.delete(intentId), config.contractIntentTtlSeconds * 1000).unref();
+      return data;
+    }
+  } catch (error) {
+    console.warn('Contract intent cache lookup failed:', error.message);
+  }
+  return null;
+}
+
+async function setCachedContractIntent(intentId, data, ttlSeconds) {
+  contractIntentCache.set(intentId, data);
+  setTimeout(() => contractIntentCache.delete(intentId), ttlSeconds * 1000).unref();
+  if (!isSupabasePersistenceEnabled()) return;
+  try {
+    await supabaseRestRequest('contract_intent_cache', {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({
+        intent_id: intentId,
+        data,
+        expires_at: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
+      }),
+    });
+  } catch (error) {
+    console.warn('Contract intent cache persistence failed:', error.message);
+  }
+}
+
+// ── Startup cleanup of expired persisted state ──────────────────────────
+
+async function cleanExpiredPersistedState() {
+  if (!isSupabasePersistenceEnabled()) return;
+  try {
+    const now = new Date().toISOString();
+    await supabaseRestRequest(`relayer_idempotency_keys?expires_at=lte.${encodeURIComponent(now)}`, {
+      method: 'DELETE',
+      headers: { Prefer: 'return=minimal' },
+    });
+    await supabaseRestRequest(`contract_intent_cache?expires_at=lte.${encodeURIComponent(now)}`, {
+      method: 'DELETE',
+      headers: { Prefer: 'return=minimal' },
+    });
+    console.log('Expired persisted state cleaned up on startup');
+  } catch (error) {
+    console.error('Failed to clean expired persisted state:', error.message);
+  }
 }
 
 async function supabaseRestRequest(path, options = {}) {
