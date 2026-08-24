@@ -44,9 +44,7 @@ const sorobanServer = config.sorobanRpcUrl
 const cpayContract = config.cpayContractId
   ? new StellarSdk.Contract(config.cpayContractId)
   : null;
-const idempotencyCache = new Map();
-const addMoneyCooldowns = new Map();
-const contractIntentCache = new Map();
+
 
 let lowBalanceAlertSent = false;
 
@@ -384,9 +382,16 @@ app.post('/payments/submit', requireAuthenticatedUser, async (req, res) => {
   const intentId = normalizeOptionalIntentId(req.body.intentId);
 
   if (idempotencyKey) {
-    const cached = await getIdempotencyResponse(idempotencyKey);
-    if (cached) {
-      return res.json(cached);
+    const lock = await acquireIdempotencyLock(idempotencyKey, config.idempotencyTtlMs);
+    if (!lock.acquired) {
+      if (lock.response === null) {
+        return res.status(409).json({
+          error: 'A request with this idempotency key is currently processing',
+          code: 'IDEMPOTENCY_IN_FLIGHT',
+          retryAfterSeconds: 5,
+        });
+      }
+      return res.json(lock.response);
     }
   }
 
@@ -456,9 +461,16 @@ app.post('/add-money', requireAuthenticatedUser, requireWalletOwnership('account
   const idempotencyKey = normalizeOptionalString(req.body.idempotencyKey);
 
   if (idempotencyKey) {
-    const cached = await getIdempotencyResponse(idempotencyKey);
-    if (cached) {
-      return res.json(cached);
+    const lock = await acquireIdempotencyLock(idempotencyKey, config.idempotencyTtlMs);
+    if (!lock.acquired) {
+      if (lock.response === null) {
+        return res.status(409).json({
+          error: 'A request with this idempotency key is currently processing',
+          code: 'IDEMPOTENCY_IN_FLIGHT',
+          retryAfterSeconds: 5,
+        });
+      }
+      return res.json(lock.response);
     }
   }
 
@@ -515,7 +527,6 @@ app.post('/add-money', requireAuthenticatedUser, requireWalletOwnership('account
   };
 
   const nextAvailableAt = new Date(Date.now() + config.addMoneyCooldownMs).toISOString();
-  addMoneyCooldowns.set(accountId, Date.parse(nextAvailableAt));
   await recordAddMoneyClaim({
     walletAddress: accountId,
     amount,
@@ -590,6 +601,7 @@ relayerHttpServer.ref();
 cleanExpiredPersistedState().catch(err => {
   console.error('Startup cleanup of persisted state failed:', err.message);
 });
+setInterval(() => cleanExpiredPersistedState().catch(() => {}), 60 * 60 * 1000).unref();
 
 module.exports = { app, server: relayerHttpServer };
 
@@ -1586,11 +1598,8 @@ async function getAccountStatus(accountId) {
 }
 
 async function getAddMoneyRetryAfterSeconds(accountId) {
-  const cooldownUntil = addMoneyCooldowns.get(accountId) || 0;
-  const remainingMs = cooldownUntil - Date.now();
-  const inMemoryRetryAfter = remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 0;
   const persistedRetryAfter = await getPersistedAddMoneyRetryAfterSeconds(accountId);
-  return Math.max(inMemoryRetryAfter, persistedRetryAfter);
+  return persistedRetryAfter;
 }
 
 async function getPersistedAddMoneyRetryAfterSeconds(accountId) {
@@ -1664,54 +1673,55 @@ function isSupabasePersistenceEnabled() {
 
 // ── Persisted idempotency ──────────────────────────────────────────────
 
-async function getIdempotencyResponse(key) {
-  if (idempotencyCache.has(key)) return idempotencyCache.get(key);
-  if (!isSupabasePersistenceEnabled()) return null;
-  try {
-    const query = new URLSearchParams({
-      select: 'response',
-      key: `eq.${key}`,
-      expires_at: `gt.${new Date().toISOString()}`,
-      limit: '1',
-    });
-    const rows = await supabaseRestRequest(`relayer_idempotency_keys?${query.toString()}`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-    });
-    if (Array.isArray(rows) && rows.length > 0) {
-      idempotencyCache.set(key, rows[0].response);
-      setTimeout(() => idempotencyCache.delete(key), config.idempotencyTtlMs).unref();
-      return rows[0].response;
-    }
-  } catch (error) {
-    console.warn('Idempotency lookup failed:', error.message);
+async function acquireIdempotencyLock(key, ttlMs) {
+  if (!isSupabasePersistenceEnabled()) {
+    return { acquired: true };
   }
-  return null;
-}
-
-async function setIdempotencyResponse(key, response, ttlMs) {
-  idempotencyCache.set(key, response);
-  setTimeout(() => idempotencyCache.delete(key), ttlMs).unref();
-  if (!isSupabasePersistenceEnabled()) return;
   try {
     await supabaseRestRequest('relayer_idempotency_keys', {
       method: 'POST',
-      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+      headers: { Prefer: 'return=minimal' },
       body: JSON.stringify({
         key,
-        response,
+        response: null,
         expires_at: new Date(Date.now() + ttlMs).toISOString(),
       }),
     });
+    return { acquired: true };
   } catch (error) {
-    console.warn('Idempotency persistence failed:', error.message);
+    if (error.response && error.response.status === 409) {
+      const query = new URLSearchParams({ select: 'response', key: `eq.${key}`, limit: '1' });
+      const rows = await supabaseRestRequest(`relayer_idempotency_keys?${query.toString()}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+      if (Array.isArray(rows) && rows.length > 0) {
+        return { acquired: false, response: rows[0].response };
+      }
+    }
+    throw error;
+  }
+}
+
+async function setIdempotencyResponse(key, response, ttlMs) {
+  if (!isSupabasePersistenceEnabled()) {
+    return;
+  }
+  try {
+    const query = new URLSearchParams({ key: `eq.${key}` });
+    await supabaseRestRequest(`relayer_idempotency_keys?${query.toString()}`, {
+      method: 'PATCH',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({ response }),
+    });
+  } catch (error) {
+    console.warn('Idempotency update failed:', error.message);
   }
 }
 
 // ── Persisted contract intent cache ────────────────────────────────────
 
 async function getCachedContractIntent(intentId) {
-  if (contractIntentCache.has(intentId)) return contractIntentCache.get(intentId);
   if (!isSupabasePersistenceEnabled()) return null;
   try {
     const query = new URLSearchParams({
@@ -1726,8 +1736,6 @@ async function getCachedContractIntent(intentId) {
     });
     if (Array.isArray(rows) && rows.length > 0) {
       const data = rows[0].data;
-      contractIntentCache.set(intentId, data);
-      setTimeout(() => contractIntentCache.delete(intentId), config.contractIntentTtlSeconds * 1000).unref();
       return data;
     }
   } catch (error) {
@@ -1737,8 +1745,6 @@ async function getCachedContractIntent(intentId) {
 }
 
 async function setCachedContractIntent(intentId, data, ttlSeconds) {
-  contractIntentCache.set(intentId, data);
-  setTimeout(() => contractIntentCache.delete(intentId), ttlSeconds * 1000).unref();
   if (!isSupabasePersistenceEnabled()) return;
   try {
     await supabaseRestRequest('contract_intent_cache', {
