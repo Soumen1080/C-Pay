@@ -28,6 +28,7 @@ export const PaymentProcessingScreen: React.FC<PaymentProcessingScreenProps> = (
   route,
 }) => {
   const { amount, recipientName, recipientAddress } = route.params;
+  const [subtitle, setSubtitle] = React.useState('This may take a few seconds');
   
   // Animations
   const spinValue = useRef(new Animated.Value(0)).current;
@@ -85,7 +86,7 @@ export const PaymentProcessingScreen: React.FC<PaymentProcessingScreenProps> = (
 
           {/* Title */}
           <Text style={styles.processingTitle}>Processing Payment</Text>
-          <Text style={styles.processingSubtitle}>This may take a few seconds</Text>
+          <Text style={styles.processingSubtitle}>{subtitle}</Text>
           
           {/* Warning Message */}
           <View style={styles.warningBox}>
@@ -168,3 +169,4 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+
