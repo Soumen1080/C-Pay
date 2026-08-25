@@ -158,8 +158,24 @@ app.get('/account/:accountId/balance', async (req, res) => {
   });
 });
 
-app.post('/accounts/prepare', requireAuthenticatedUser, requireWalletOwnership('accountId'), async (req, res) => {
+app.post('/accounts/prepare', requireAuthenticatedUser, async (req, res) => {
   const accountId = assertAccountId(req.body.accountId, 'accountId');
+
+  if (config.authRequired && req.auth && req.auth.sub && isSupabasePersistenceEnabled()) {
+    try {
+      await supabaseRestRequest('wallet_bindings', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify({
+          auth_user_id: req.auth.sub,
+          wallet_address: accountId,
+        }),
+      });
+    } catch (err) {
+      console.error('Failed to bind wallet:', err.message);
+    }
+  }
+
   const status = await getAccountStatus(accountId);
 
   if (status.exists && status.hasTrustline) {
@@ -212,9 +228,17 @@ app.post('/accounts/prepare', requireAuthenticatedUser, requireWalletOwnership('
   });
 });
 
-app.post('/accounts/submit', requireAuthenticatedUser, async (req, res) => {
+app.post('/accounts/submit', requireAuthenticatedUser, requireWalletOwnership(), async (req, res) => {
   const signedXdr = assertTransactionEnvelopeXdr(req.body.signedXdr);
   const tx = StellarSdk.TransactionBuilder.fromXDR(signedXdr, config.passphrase);
+  
+  if (req.resolvedWallets && !req.resolvedWallets.includes(tx.source)) {
+    return res.status(403).json({
+      error: 'You are not authorized to submit transactions for this wallet',
+      code: 'WALLET_OWNERSHIP_DENIED',
+    });
+  }
+
   const result = await server.submitTransaction(tx);
 
   res.json({
@@ -343,12 +367,20 @@ app.post('/payments/intents/prepare', requireAuthenticatedUser, requireWalletOwn
   });
 });
 
-app.post('/payments/intents/submit', requireAuthenticatedUser, async (req, res) => {
+app.post('/payments/intents/submit', requireAuthenticatedUser, requireWalletOwnership(), async (req, res) => {
   assertContractFlowEnabled();
 
   const intentId = normalizeIntentId(req.body.intentId);
   const signedXdr = assertTransactionEnvelopeXdr(req.body.signedXdr);
   const transaction = StellarSdk.TransactionBuilder.fromXDR(signedXdr, config.passphrase);
+  
+  if (req.resolvedWallets && !req.resolvedWallets.includes(transaction.source)) {
+    return res.status(403).json({
+      error: 'You are not authorized to submit transactions for this wallet',
+      code: 'WALLET_OWNERSHIP_DENIED',
+    });
+  }
+
   const cachedIntent = await getCachedContractIntent(intentId);
 
   if (cachedIntent && transaction.source !== cachedIntent.payer) {
@@ -378,19 +410,34 @@ app.post('/payments/intents/submit', requireAuthenticatedUser, async (req, res) 
   });
 });
 
-app.post('/payments/submit', requireAuthenticatedUser, async (req, res) => {
+app.post('/payments/submit', requireAuthenticatedUser, requireWalletOwnership(), async (req, res) => {
   const signedXdr = assertTransactionEnvelopeXdr(req.body.signedXdr);
   const idempotencyKey = normalizeOptionalString(req.body.idempotencyKey);
   const intentId = normalizeOptionalIntentId(req.body.intentId);
 
   if (idempotencyKey) {
-    const cached = await getIdempotencyResponse(idempotencyKey);
-    if (cached) {
-      return res.json(cached);
+    const lock = await acquireIdempotencyLock(idempotencyKey, config.idempotencyTtlMs);
+    if (!lock.acquired) {
+      if (lock.response === null) {
+        return res.status(409).json({
+          error: 'A request with this idempotency key is currently processing',
+          code: 'IDEMPOTENCY_IN_FLIGHT',
+          retryAfterSeconds: 5,
+        });
+      }
+      return res.json(lock.response);
     }
   }
 
   const innerTransaction = StellarSdk.TransactionBuilder.fromXDR(signedXdr, config.passphrase);
+  
+  if (req.resolvedWallets && !req.resolvedWallets.includes(innerTransaction.source)) {
+    return res.status(403).json({
+      error: 'You are not authorized to submit transactions for this wallet',
+      code: 'WALLET_OWNERSHIP_DENIED',
+    });
+  }
+
   const payment = validatePaymentTransaction(innerTransaction);
 
   if (intentId) {
@@ -787,8 +834,9 @@ async function resolveUserWallets(authUid) {
     const query = new URLSearchParams({
       select: 'wallet_address',
       auth_user_id: `eq.${authUid}`,
+      is_active: 'eq.true',
     });
-    const rows = await supabaseRestRequest(`users?${query.toString()}`, {
+    const rows = await supabaseRestRequest(`wallet_bindings?${query.toString()}`, {
       method: 'GET',
       headers: { Accept: 'application/json' },
     });
@@ -825,11 +873,6 @@ function requireWalletOwnership(walletField) {
       });
     }
 
-    const requestedWallet = req.body && req.body[walletField];
-    if (!requestedWallet) {
-      return next();
-    }
-
     const ownedWallets = await resolveUserWallets(authUid);
 
     // When Supabase persistence is not configured, skip the ownership check.
@@ -837,11 +880,30 @@ function requireWalletOwnership(walletField) {
       return next();
     }
 
-    if (!ownedWallets.includes(requestedWallet)) {
+    if (!ownedWallets || ownedWallets.length === 0) {
+      // If we are preparing an account, it might not be bound yet.
+      // But we already added the binding to /accounts/prepare.
       return res.status(403).json({
-        error: 'You are not authorized to perform actions for this wallet',
-        code: 'WALLET_OWNERSHIP_DENIED',
+        error: 'No wallets bound to this user',
+        code: 'NO_WALLETS_BOUND',
       });
+    }
+
+    if (walletField) {
+      const requestedWallet = req.body && req.body[walletField];
+      if (requestedWallet) {
+        if (!ownedWallets.includes(requestedWallet)) {
+          return res.status(403).json({
+            error: 'You are not authorized to perform actions for this wallet',
+            code: 'WALLET_OWNERSHIP_DENIED',
+          });
+        }
+      } else {
+        // Resolve wallet from binding rather than trusting body
+        req.body[walletField] = ownedWallets[0];
+      }
+    } else {
+      req.resolvedWallets = ownedWallets;
     }
 
     return next();
