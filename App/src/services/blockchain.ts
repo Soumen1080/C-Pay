@@ -55,10 +55,10 @@ const CPINR_ASSET_CODE = getEnvVar('EXPO_PUBLIC_CPINR_ASSET_CODE', 'CPINR');
 const CPINR_ASSET_ISSUER = getEnvVar('EXPO_PUBLIC_CPINR_ASSET_ISSUER', '');
 const RELAYER_URL = resolveRelayerUrl();
 const BASE_FEE = getEnvVar('EXPO_PUBLIC_STELLAR_BASE_FEE', StellarSdk.BASE_FEE);
-const RELAYER_TIMEOUT_MS = 12000;
+const RELAYER_TIMEOUT_MS = 60000;
 const ACCOUNT_READY_TIMEOUT_MS = 15000;
 const ACCOUNT_READY_POLL_MS = 1500;
-const CONTRACT_INTENT_TIMEOUT_MS = 25000;
+const CONTRACT_INTENT_TIMEOUT_MS = 60000;
 
 export type TransactionStatus = 'pending' | 'success' | 'failed' | 'unknown';
 
@@ -496,52 +496,83 @@ async function relayerRequest<T = any>(
     });
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const { data } = await supabase.auth.getSession();
+  const accessToken = data.session?.access_token;
+  const optionHeaders = (options.headers || {}) as Record<string, string>;
 
-  let response: Response;
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    ...optionHeaders,
+  };
 
-  try {
-    const { data } = await supabase.auth.getSession();
-    const accessToken = data.session?.access_token;
-    const optionHeaders = (options.headers || {}) as Record<string, string>;
+  let attempt = 0;
+  const maxAttempts = 3;
 
-    response = await fetch(`${RELAYER_URL}${path}`, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        ...optionHeaders,
-      },
-    });
-  } catch (error: any) {
-    if (error?.name === 'AbortError') {
-      throw new RelayerRequestError('Payment service is taking too long to respond. Please try again.', {
-        code: 'RELAYER_TIMEOUT',
+  while (attempt < maxAttempts) {
+    attempt++;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    let response: Response;
+    let body: any = {};
+
+    try {
+      response = await fetch(`${RELAYER_URL}${path}`, {
+        ...options,
+        signal: controller.signal,
+        headers,
       });
+
+      body = await response.json().catch(() => ({})) as RelayerErrorBody;
+
+      if (!response.ok) {
+        // Retry on cold-start-shaped failures (502, 503, 504)
+        if ([502, 503, 504].includes(response.status) && attempt < maxAttempts) {
+          await delay(2000 * attempt); // Backoff: 2s, 4s...
+          continue;
+        }
+
+        throw new RelayerRequestError(body.error || 'Payment service unavailable', {
+          status: response.status,
+          code: body.code,
+          retryAfterSeconds: normalizeRetryAfterSeconds(body.retryAfterSeconds),
+          details: body,
+        });
+      }
+
+      return body as T;
+    } catch (error: any) {
+      clearTimeout(timeout);
+
+      // If it's a timeout or network error, maybe retry if we haven't exhausted attempts
+      const isAbort = error?.name === 'AbortError';
+      if (attempt < maxAttempts) {
+        await delay(2000 * attempt);
+        continue;
+      }
+
+      if (isAbort) {
+        throw new RelayerRequestError('Payment service is taking too long to respond. Please try again.', {
+          code: 'RELAYER_TIMEOUT',
+        });
+      }
+
+      // If it was already thrown by us, rethrow
+      if (error instanceof RelayerRequestError) {
+        throw error;
+      }
+
+      throw new RelayerRequestError(
+        `Payment service is not reachable. Check your internet connection and relayer URL (${RELAYER_URL}).`,
+        { code: 'RELAYER_UNREACHABLE' }
+      );
+    } finally {
+      clearTimeout(timeout);
     }
-
-    throw new RelayerRequestError(
-      `Payment service is not reachable. Check your internet connection and relayer URL (${RELAYER_URL}).`,
-      { code: 'RELAYER_UNREACHABLE' }
-    );
-  } finally {
-    clearTimeout(timeout);
   }
 
-  const body = await response.json().catch(() => ({})) as RelayerErrorBody;
-
-  if (!response.ok) {
-    throw new RelayerRequestError(body.error || 'Payment service unavailable', {
-      status: response.status,
-      code: body.code,
-      retryAfterSeconds: normalizeRetryAfterSeconds(body.retryAfterSeconds),
-      details: body,
-    });
-  }
-
-  return body as T;
+  throw new RelayerRequestError('Payment service failed after multiple attempts.');
 }
 
 function normalizeRetryAfterSeconds(value: unknown): number {
