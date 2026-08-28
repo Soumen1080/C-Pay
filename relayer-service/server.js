@@ -45,6 +45,17 @@ const cpayContract = config.cpayContractId
   ? new StellarSdk.Contract(config.cpayContractId)
   : null;
 
+const { IngestWorker } = require('./ingestWorker');
+const ingestWorker = new IngestWorker({
+  horizonUrl: config.horizonUrl,
+  assetCode: config.assetCode,
+  assetIssuer: config.assetIssuer,
+  supabaseUrl: config.supabaseUrl,
+  supabaseServiceRoleKey: config.supabaseServiceRoleKey,
+  pollIntervalMs: config.ingestPollIntervalMs,
+  pendingTimeoutMs: config.ingestPendingTimeoutMs,
+  startCursor: config.ingestStartCursor,
+});
 
 let lowBalanceAlertSent = false;
 
@@ -84,8 +95,13 @@ app.get('/', (_req, res) => {
       'POST /qr/verify',
       'POST /add-money',
       'GET /tx/:hash',
+      'GET /ingest/health',
     ],
   });
+});
+
+app.get('/ingest/health', (_req, res) => {
+  res.json(ingestWorker.getHealth());
 });
 
 app.get('/health', async (_req, res) => {
@@ -124,6 +140,7 @@ app.get('/health', async (_req, res) => {
     tokenContractId: config.tokenContractId,
     sorobanRpcUrl: config.sorobanRpcUrl,
     qrSigningConfigured: Boolean(config.qrSigningSecret),
+    ingest: ingestWorker.getHealth(),
     lowXlm,
     lowAsset,
     timestamp: new Date().toISOString(),
@@ -637,13 +654,20 @@ const relayerHttpServer = app.listen(PORT, '0.0.0.0', () => {
 });
 relayerHttpServer.ref();
 
+// Start ledger ingest worker on startup (non-blocking)
+if (config.ledgerIngestEnabled && ingestWorker.isConfigured) {
+  ingestWorker.start('stream').catch(err => {
+    console.warn('Ingest worker startup warning:', err.message);
+  });
+}
+
 // Clean up expired persisted state on startup (non-blocking)
 cleanExpiredPersistedState().catch(err => {
   console.error('Startup cleanup of persisted state failed:', err.message);
 });
 setInterval(() => cleanExpiredPersistedState().catch(() => {}), 60 * 60 * 1000).unref();
 
-module.exports = { app, server: relayerHttpServer };
+module.exports = { app, server: relayerHttpServer, ingestWorker };
 
 function loadConfig() {
   const networkName = (process.env.STELLAR_NETWORK || 'testnet').toLowerCase();
@@ -733,6 +757,11 @@ function loadConfig() {
     // QR signing – optional but recommended for production
     qrSigningSecret: process.env.QR_SIGNING_SECRET || '',
     qrDefaultTtlSeconds: Number(process.env.QR_DEFAULT_TTL_SECONDS || 86400),
+    // Ledger Ingest worker
+    ledgerIngestEnabled: readBooleanEnv('LEDGER_INGEST_ENABLED', true),
+    ingestPollIntervalMs: Number(process.env.INGEST_POLL_INTERVAL_MS || 5000),
+    ingestPendingTimeoutMs: Number(process.env.INGEST_PENDING_TIMEOUT_MS || 300000),
+    ingestStartCursor: process.env.INGEST_START_CURSOR || null,
   };
 }
 

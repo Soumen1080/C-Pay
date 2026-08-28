@@ -1,6 +1,6 @@
 # C-Pay Stellar Relayer
 
-Backend service that sponsors Stellar account setup, submits fee-bump payments, and handles test Add Money distribution.
+Backend service that sponsors Stellar account setup, submits fee-bump payments, handles test Add Money distribution, and runs the Horizon ledger ingest worker.
 
 ## Setup
 
@@ -21,15 +21,19 @@ npm start
 - `DISTRIBUTION_SECRET`: secret seed for the hot distribution account
 - `RELAYER_AUTH_REQUIRED`: set to `true` for production/public-network deployments
 - `SUPABASE_JWT_SECRET`: required for legacy HS256 Supabase JWT verification when relayer auth is enabled, unless using Supabase Auth API validation with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`
-- `SUPABASE_URL`: optional; enables persistent Add Money claim logging/cooldowns
-- `SUPABASE_SERVICE_ROLE_KEY`: optional; required with `SUPABASE_URL` for relayer-only writes to `add_money_claims`
+- `SUPABASE_URL`: optional; enables persistent Add Money claim logging/cooldowns and ledger ingestion
+- `SUPABASE_SERVICE_ROLE_KEY`: optional; required with `SUPABASE_URL` for relayer-only writes
 - `ENABLE_ADD_MONEY`: defaults off on `public`; keep off for real-money production
+- `LEDGER_INGEST_ENABLED`: `true` to enable background Horizon payment operation ingestion
+- `INGEST_POLL_INTERVAL_MS`: poll interval in ms (default: `5000`)
+- `INGEST_PENDING_TIMEOUT_MS`: timeout after which unconfirmed pending transactions are marked failed (default: `300000`)
 
 Keep issuer secrets offline. The relayer needs sponsor and capped distribution secrets for Stellar payments.
 
 ## Endpoints
 
 - `GET /health`
+- `GET /ingest/health`
 - `GET /account/:accountId/status`
 - `GET /account/:accountId/balance`
 - `POST /accounts/prepare`
@@ -37,6 +41,14 @@ Keep issuer secrets offline. The relayer needs sponsor and capped distribution s
 - `POST /payments/submit`
 - `POST /add-money`
 - `GET /tx/:hash`
+
+## Ledger Ingest Worker
+
+The Ingest Worker continuously streams/polls Horizon payment operations:
+1. **Resumable Ingestion**: Uses a cursor persisted in Supabase `ingest_state` table to resume without scanning from genesis.
+2. **Idempotency**: Upserts into `transactions` with key `(tx_hash, op_index)`. Replaying the same ledger range causes no duplicates.
+3. **Reconciliation**: Matches chain records against optimistic pending transactions and marks timed-out pending rows as failed.
+4. **Lag Metrics**: Calculates and exposes ledger lag (`latestNetworkLedger - lastIngestedLedger`) via `GET /ingest/health` and `GET /health`.
 
 ## Production Notes
 
