@@ -394,7 +394,7 @@ const styles = StyleSheet.create({
   receiptAmountValue: {
     fontSize: 32,
     fontWeight: '900',
-    color: '#667EEA',
+    color: COLORS.primary,
     letterSpacing: 0.5,
   },
   receiptDivider: {

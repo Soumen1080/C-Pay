@@ -111,60 +111,6 @@ async function incrementAttempt(): Promise<void> {
   }
 }
 
-/**
- * Send OTP to phone number using Supabase
- */
-export async function sendOTP(phoneNumber: string): Promise<{
-  success: boolean;
-  verificationId?: string;
-  error?: string;
-  remainingAttempts?: number;
-  resetTime?: Date;
-}> {
-  try {
-    // Check rate limit first
-    const rateLimitCheck = await checkRateLimit();
-    
-    if (!rateLimitCheck.allowed) {
-      const resetTime = rateLimitCheck.resetTime!;
-      const hours = getRetryHours(resetTime);
-      return {
-        success: false,
-        error: `Too many OTP requests. Please try again in ${hours} hour${hours > 1 ? 's' : ''}.`,
-        remainingAttempts: 0,
-        resetTime: resetTime,
-      };
-    }
-
-    // Production: Use Supabase phone auth
-    const { data, error } = await supabase.auth.signInWithOtp({
-      phone: phoneNumber,
-    });
-
-    if (error) {
-      return {
-        success: false,
-        error: error.message,
-        remainingAttempts: rateLimitCheck.remainingAttempts,
-      };
-    }
-
-    // Increment attempt after successful send
-    await incrementAttempt();
-
-    return {
-      success: true,
-      verificationId: phoneNumber, // Supabase uses phone number as identifier
-      remainingAttempts: rateLimitCheck.remainingAttempts - 1,
-    };
-  } catch (error: any) {
-    console.error('Send OTP error:', error);
-    return {
-      success: false,
-      error: error.message || 'Failed to send OTP',
-    };
-  }
-}
 
 /**
  * Send an email OTP for the current login/onboarding verification flow.
@@ -260,44 +206,6 @@ export async function verifyLoginEmailOTP(
   }
 }
 
-/**
- * Verify OTP code using Supabase
- */
-export async function verifyOTP(
-  verificationId: string,
-  otpCode: string
-): Promise<{
-  success: boolean;
-  phoneNumber?: string;
-  error?: string;
-}> {
-  try {
-    // Production: Verify with Supabase
-    const { data, error } = await supabase.auth.verifyOtp({
-      phone: verificationId,
-      token: otpCode,
-      type: 'sms',
-    });
-
-    if (error) {
-      return {
-        success: false,
-        error: error.message,
-      };
-    }
-
-    return {
-      success: true,
-      phoneNumber: data.user?.phone || verificationId,
-    };
-  } catch (error: any) {
-    console.error('Verify OTP error:', error);
-    return {
-      success: false,
-      error: error.message || 'Invalid OTP code',
-    };
-  }
-}
 
 /**
  * Get remaining OTP attempts for the day
@@ -495,47 +403,3 @@ export async function verifyMerchantContactOtp(
   }
 }
 
-/**
- * Send OTP to phone number when an SMS provider is configured
- */
-export async function sendPhoneOTP(phoneNumber: string): Promise<{
-  success: boolean;
-  verificationId?: string;
-  error?: string;
-}> {
-  try {
-    // Production: Use existing sendOTP function
-    const result = await sendOTP(phoneNumber);
-    return result;
-  } catch (error: any) {
-    console.error('Send phone OTP error:', error);
-    return {
-      success: false,
-      error: error.message || 'Failed to send phone OTP',
-    };
-  }
-}
-
-/**
- * Verify phone OTP when an SMS provider is configured
- */
-export async function verifyPhoneOTP(
-  verificationId: string,
-  otpCode: string
-): Promise<{
-  success: boolean;
-  phoneNumber?: string;
-  error?: string;
-}> {
-  try {
-    // Production: Use existing verifyOTP function
-    const result = await verifyOTP(verificationId, otpCode);
-    return result;
-  } catch (error: any) {
-    console.error('Verify phone OTP error:', error);
-    return {
-      success: false,
-      error: error.message || 'Invalid phone OTP code',
-    };
-  }
-}
