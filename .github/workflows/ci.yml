@@ -75,7 +75,7 @@ jobs:
         run: npm test -- --runInBand
 
   blockchain:
-    name: Blockchain and contract
+    name: Blockchain
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -91,30 +91,8 @@ jobs:
           cache: npm
           cache-dependency-path: Blockchain/package-lock.json
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-
-      - name: Cache Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            Blockchain/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Blockchain/Cargo.lock', 'Blockchain/contracts/**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
       - name: Install dependencies
         run: npm ci
 
       - name: Run Stellar rail tests
         run: npm test -- --runInBand
-
-      - name: Check contract formatting
-        run: cargo fmt --manifest-path contracts/cpay_payments/Cargo.toml -- --check
-
-      - name: Run contract tests
-        run: cargo test --manifest-path contracts/cpay_payments/Cargo.toml
