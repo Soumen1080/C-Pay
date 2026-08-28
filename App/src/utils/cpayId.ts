@@ -151,50 +151,6 @@ export async function getCurrentUserCPayId(): Promise<string | null> {
 }
 
 /**
- * Get C-Pay ID for current merchant from database or generate a local fallback.
- */
-export async function getCurrentMerchantCPayId(): Promise<string | null> {
-  try {
-    const walletAddress = await AsyncStorage.getItem('wallet_address');
-    
-    if (!walletAddress) {
-      return null;
-    }
-    
-    // Fetch from merchants table
-    const { data, error } = await supabase
-      .from('merchants')
-      .select('cpay_id, phone_number')
-      .eq('wallet_address', walletAddress)
-      .single();
-
-    if (!error && data?.cpay_id && !isLegacyAddressSuffixId(data.cpay_id, walletAddress)) {
-      return data.cpay_id;
-    }
-
-    const phone = data?.phone_number || await getStoredPhoneNumber() || '';
-    const generatedId = generateCPayId(phone, walletAddress);
-
-    if (!error && data) {
-      await supabase
-        .from('merchants')
-        .update({ cpay_id: generatedId })
-        .eq('wallet_address', walletAddress);
-    }
-
-    return generatedId;
-  } catch (error) {
-    console.error('Error getting merchant C-Pay ID:', error);
-    const walletAddress = await AsyncStorage.getItem('wallet_address');
-    if (!walletAddress) {
-      return null;
-    }
-    const phone = await getStoredPhoneNumber();
-    return generateCPayId(phone || '', walletAddress);
-  }
-}
-
-/**
  * Get C-Pay ID for any wallet address by fetching from database.
  * @param walletAddress - Wallet address to look up
  * @returns C-Pay ID or null if not found in database
@@ -287,7 +243,7 @@ export function extractPhoneFromCPayId(cpayId: string): string | null {
 }
 
 /**
- * Get wallet address from C-Pay ID by searching in both users and merchants tables
+ * Get wallet address from C-Pay ID using the public user profile lookup.
  * @param cpayId - C-Pay ID to look up
  * @returns Wallet address or null if not found
  */

@@ -17,7 +17,6 @@ import QRCode from 'react-native-qrcode-svg';
 import ViewShot from 'react-native-view-shot';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { isMerchant, getMerchantProfile, merchantEvents } from '../services/merchant';
 import { supabase } from '../services/supabase';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/theme';
 import { Screen, Section, ActionRow } from '../components';
@@ -35,8 +34,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
   const [walletAddress, setWalletAddress] = useState<string>('');
   const [cpayId, setCpayId] = useState<string>('');
   const [displayName, setDisplayName] = useState<string>('');
-  const [merchantStatus, setMerchantStatus] = useState<boolean>(false);
-  const [businessName, setBusinessName] = useState<string>('');
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(true);
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [showQRCode, setShowQRCode] = useState<boolean>(false);
@@ -46,22 +43,16 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
     loadWalletAddress();
     loadCPayId();
     loadDisplayName();
-    checkMerchantStatus();
     loadSettings();
     loadProfilePhoto();
 
-    const merchantListener = () => checkMerchantStatus();
-    merchantEvents.on('merchantRegistered', merchantListener);
-    return () => {
-      merchantEvents.off('merchantRegistered', merchantListener);
-    };
+    return undefined;
   }, []);
 
   useFocusEffect(
     React.useCallback(() => {
       loadCPayId();
       loadDisplayName();
-      checkMerchantStatus();
       loadProfilePhoto();
       loadSettings();
     }, [])
@@ -126,18 +117,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
       }
     } catch (error) {
       console.error('Error loading profile photo:', error);
-    }
-  };
-
-  const checkMerchantStatus = async () => {
-    const address = await AsyncStorage.getItem('wallet_address');
-    if (address) {
-      const isMerch = await isMerchant(address);
-      setMerchantStatus(isMerch);
-      if (isMerch) {
-        const profile = await getMerchantProfile(address);
-        if (profile) setBusinessName(profile.business_name);
-      }
     }
   };
 
@@ -441,35 +420,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
         </View>
       </Section>
 
-      {/* Merchant */}
-      <Section title="Merchant">
-        {merchantStatus ? (
-          <View style={styles.merchantCard}>
-            <View style={styles.merchantHeader}>
-              <Text style={styles.merchantBadge}>Merchant Account</Text>
-              <Text style={styles.merchantName}>{businessName}</Text>
-            </View>
-            <TouchableOpacity
-              style={styles.merchantButton}
-              onPress={() => navigation.navigate('MerchantDashboard')}
-            >
-              <Ionicons name="stats-chart-outline" size={20} color={COLORS.textInverse} style={styles.merchantButtonIcon} />
-              <Text style={styles.merchantButtonText}>Open Dashboard</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <View style={styles.card}>
-            <ActionRow
-              style={styles.rowFlat}
-              icon="storefront-outline"
-              title="Become a Merchant"
-              subtitle="Accept payments from customers"
-              onPress={() => navigation.navigate('MerchantRegistration')}
-            />
-          </View>
-        )}
-      </Section>
-
       {/* Support */}
       <Section title="Support">
         <View style={styles.card}>
@@ -710,46 +660,6 @@ const styles = StyleSheet.create({
     color: COLORS.text,
   },
   shareButtonText: {
-    color: COLORS.textInverse,
-  },
-  merchantCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: BORDER_RADIUS.lg,
-    padding: SPACING.lg,
-    borderLeftWidth: 4,
-    borderLeftColor: COLORS.success,
-    ...SHADOWS.md,
-  },
-  merchantHeader: {
-    marginBottom: SPACING.md,
-  },
-  merchantBadge: {
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.success,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  merchantName: {
-    fontSize: FONT_SIZES.lg,
-    fontWeight: '600',
-    color: COLORS.textPrimary,
-    marginTop: SPACING.xs,
-  },
-  merchantButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.primary,
-    padding: SPACING.md,
-    borderRadius: BORDER_RADIUS.md,
-  },
-  merchantButtonIcon: {
-    marginRight: SPACING.sm,
-  },
-  merchantButtonText: {
-    fontSize: FONT_SIZES.md,
-    fontWeight: '600',
     color: COLORS.textInverse,
   },
   signOutSection: {

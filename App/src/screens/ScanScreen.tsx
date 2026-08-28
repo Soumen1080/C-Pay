@@ -228,6 +228,14 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ navigation, route }) => 
       // 5. v2 legacy path – structural check only, show deprecation notice
       // -----------------------------------------------------------------------
       const v2 = parsed as PaymentQRData;
+      if (v2.merchantId) {
+        AlertManager.alert(
+          'QR code no longer supported',
+          'This older payment QR format is no longer supported. Ask the recipient to share a new QR code.',
+          [{ text: 'Scan Again', onPress: resetScan }]
+        );
+        return;
+      }
       const v2Check = validatePaymentQR(v2);
       if (!v2Check.valid) {
         AlertManager.alert('Invalid Payment', v2Check.error || 'Invalid payment data', [
