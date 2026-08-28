@@ -21,7 +21,6 @@ C-Pay handles Stellar wallets, encrypted key storage, payment transactions, and 
 
 - **Wallet encryption** (`App/src/services/wallet.ts`, `App/src/services/cloudWalletBackup.ts`) -- Stellar secret storage and cloud backup encryption
 - **Relayer** (`relayer-service/server.js`) -- Sponsored setup, fee bumps, Add Money distribution, authentication
-- **Soroban contract** (`Blockchain/contracts/cpay_payments/`) -- Merchant registry and payment intent state
 - **Authentication** (`App/src/services/auth.ts`) -- Supabase OTP session handling
 
 ## What We Ask

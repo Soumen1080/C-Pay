@@ -7,16 +7,12 @@
   "scripts": {
     "test": "jest",
     "create:keypairs": "node scripts/create-keypairs.js",
-    "setup:testnet": "node scripts/setup-testnet-asset.js",
-    "contract:build": "stellar contract build --manifest-path contracts/cpay_payments/Cargo.toml --optimize --out-dir target/stellar",
-    "deploy:contract": "node scripts/deploy-contract.js"
+    "setup:testnet": "node scripts/setup-testnet-asset.js"
   },
   "keywords": [
     "stellar",
     "payments",
-    "issued-assets",
-    "soroban",
-    "stellar-asset-contract"
+    "issued-assets"
   ],
   "author": "CryptoPay",
   "license": "MIT",

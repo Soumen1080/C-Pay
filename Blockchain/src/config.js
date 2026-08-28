@@ -28,22 +28,6 @@ function getNetworkConfig() {
   };
 }
 
-function getSorobanConfig() {
-  const network = getNetworkConfig();
-
-  return {
-    rpcUrl: process.env.SOROBAN_RPC_URL || defaultSorobanRpcUrl(network.name),
-    passphrase: process.env.SOROBAN_NETWORK_PASSPHRASE || network.passphrase,
-    cliNetwork: process.env.STELLAR_CLI_NETWORK || network.name,
-    cliSourceAccount: process.env.STELLAR_CLI_SOURCE_ACCOUNT || '',
-    tokenContractId: process.env.TOKEN_CONTRACT_ID || '',
-    cpayContractId: process.env.CPAY_CONTRACT_ID || '',
-  };
-}
-
-function defaultSorobanRpcUrl(networkName) {
-  return networkName === 'testnet' ? 'https://soroban-testnet.stellar.org' : '';
-}
 
 function getServer() {
   const { horizonUrl } = getNetworkConfig();
@@ -106,6 +90,5 @@ module.exports = {
   getAssetConfig,
   getNetworkConfig,
   getServer,
-  getSorobanConfig,
   requireEnv,
 };
