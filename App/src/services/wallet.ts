@@ -58,6 +58,10 @@ const BIOMETRIC_BACKUP_KEY = 'cpay_stellar_biometric_backup';
 const BIOMETRIC_BACKUP_AVAILABLE_KEY = 'cpay_stellar_biometric_backup_available';
 /** Persisted PIN attempt state: { attempts, lockedUntil } */
 const PIN_ATTEMPTS_KEY = 'cpay_pin_attempts';
+/** Pending values make PIN changes recoverable if the app is killed mid-write. */
+const PENDING_WALLET_KEY = `${WALLET_KEY}_pending`;
+const PENDING_PIN_KEY = `${PIN_KEY}_pending`;
+const PENDING_SALT_KEY = `${SALT_KEY}_pending`;
 
 // ─── Versioning & KDF constants ───────────────────────────────────────────────
 const WALLET_STORAGE_VERSION = 4;
@@ -296,22 +300,33 @@ export async function hasWallet(): Promise<boolean> {
 export async function verifyPin(pin: string, options: VerifyPinOptions = {}): Promise<boolean> {
   try {
     const { migrate = true, blockMigration = true } = options;
-    const [storedPinVerifier, saltHex] = await Promise.all([
-      SecureStore.getItemAsync(PIN_KEY),
-      SecureStore.getItemAsync(SALT_KEY),
-    ]);
+    const candidates = [
+      [PIN_KEY, SALT_KEY],
+      [PENDING_PIN_KEY, PENDING_SALT_KEY],
+    ] as const;
+    let pinHash: string | null = null;
+    let verifier: ReturnType<typeof parsePinVerifier> | null = null;
+    for (const [pinKey, saltKey] of candidates) {
+      const [storedPinVerifier, saltHex] = await Promise.all([
+        SecureStore.getItemAsync(pinKey), SecureStore.getItemAsync(saltKey),
+      ]);
+      if (!storedPinVerifier || !saltHex) continue;
+      const parsed = parsePinVerifier(storedPinVerifier);
+      const candidateHash = await hashPinWithSalt(pin, saltHex, parsed.kdfIterations);
+      if (parsed.hash === candidateHash) {
+        pinHash = candidateHash;
+        verifier = parsed;
+        break;
+      }
+    }
 
-    if (!storedPinVerifier || !saltHex) return false;
-
-    const verifier = parsePinVerifier(storedPinVerifier);
-    const pinHash = await hashPinWithSalt(pin, saltHex, verifier.kdfIterations);
-    const isValid = verifier.hash === pinHash;
+    const isValid = pinHash !== null;
 
     if (isValid) {
-      cachedPinHash = pinHash;
+      cachedPinHash = pinHash!;
       cachePinForSession(pin);
 
-      if (verifier.needsMigration && migrate) {
+      if (verifier!.needsMigration && migrate) {
         const migration = storePinVerifier(pin);
         if (blockMigration) {
           await migration;
@@ -337,9 +352,34 @@ export async function changeWalletPin(oldPin: string, newPin: string): Promise<v
   const secret = await readSecret(oldPin);
   if (!secret) throw new Error('Wallet not found');
 
-  await SecureStore.deleteItemAsync(SALT_KEY);
-  await storeSecret(secret, newPin);
-  await storePinVerifier(newPin);
+  // Stage every new value first. The old wallet remains usable until the
+  // staged wallet and verifier have both been written and validated.
+  const pendingSalt = bytesToHex(await Crypto.getRandomBytesAsync(16));
+  const pendingHash = await hashPinWithSalt(newPin, pendingSalt, PIN_KDF_ITERATIONS);
+  const pendingVerifier: StoredPinVerifierPayload = {
+    version: PIN_VERIFIER_VERSION,
+    kdf: 'pbkdf2-sha256',
+    kdfIterations: PIN_KDF_ITERATIONS,
+    hash: pendingHash,
+    updatedAt: new Date().toISOString(),
+  };
+  await SecureStore.setItemAsync(PENDING_SALT_KEY, pendingSalt);
+  await SecureStore.setItemAsync(PENDING_PIN_KEY, JSON.stringify(pendingVerifier));
+  await storeSecretWithSalt(secret, newPin, hexToBytes(pendingSalt), PENDING_WALLET_KEY);
+  if (!(await readSecretAt(newPin, PENDING_WALLET_KEY))) {
+    throw new Error('Unable to validate staged wallet during PIN change');
+  }
+
+  // Copying can be interrupted safely: verifyPin/readSecret also inspect the
+  // complete pending set, so either old or new credentials remain usable.
+  await SecureStore.setItemAsync(WALLET_KEY, (await SecureStore.getItemAsync(PENDING_WALLET_KEY))!);
+  await SecureStore.setItemAsync(SALT_KEY, pendingSalt);
+  await SecureStore.setItemAsync(PIN_KEY, JSON.stringify(pendingVerifier));
+  await Promise.all([
+    SecureStore.deleteItemAsync(PENDING_WALLET_KEY),
+    SecureStore.deleteItemAsync(PENDING_SALT_KEY),
+    SecureStore.deleteItemAsync(PENDING_PIN_KEY),
+  ]);
   cachePinForSession(newPin);
   cacheWalletForSession(secret);
 }
@@ -416,8 +456,11 @@ async function deriveWalletKey(pin: string, salt: Uint8Array, iterations: number
 // ─── Wallet encryption ────────────────────────────────────────────────────────
 
 async function storeSecret(secret: string, pin: string): Promise<void> {
+  await storeSecretWithSalt(secret, pin, await Crypto.getRandomBytesAsync(16), WALLET_KEY);
+}
+
+async function storeSecretWithSalt(secret: string, pin: string, salt: Uint8Array, keyName: string): Promise<void> {
   const wallet = createWalletObject(secret);
-  const salt = await Crypto.getRandomBytesAsync(16);
   const nonce = await Crypto.getRandomBytesAsync(24);
   const key = await deriveWalletKey(pin, salt, WALLET_KDF_ITERATIONS);
   const cipher = xchacha20poly1305(key, nonce);
@@ -435,11 +478,15 @@ async function storeSecret(secret: string, pin: string): Promise<void> {
     updatedAt: new Date().toISOString(),
   };
 
-  await SecureStore.setItemAsync(WALLET_KEY, JSON.stringify(payload));
+  await SecureStore.setItemAsync(keyName, JSON.stringify(payload));
 }
 
 async function readSecret(pin: string): Promise<string | null> {
-  const stored = await SecureStore.getItemAsync(WALLET_KEY);
+  return (await readSecretAt(pin, WALLET_KEY)) || (await readSecretAt(pin, PENDING_WALLET_KEY));
+}
+
+async function readSecretAt(pin: string, keyName: string): Promise<string | null> {
+  const stored = await SecureStore.getItemAsync(keyName);
   if (!stored) return null;
 
   try {
@@ -516,10 +563,13 @@ export async function clearBiometricBackup(): Promise<void> {
 export async function clearWallet(): Promise<void> {
   try {
     await SecureStore.deleteItemAsync(WALLET_KEY);
+    await SecureStore.deleteItemAsync(PENDING_WALLET_KEY);
     await SecureStore.deleteItemAsync(SALT_KEY);
+    await SecureStore.deleteItemAsync(PENDING_SALT_KEY);
     await SecureStore.deleteItemAsync(BIOMETRIC_BACKUP_KEY);
     await SecureStore.deleteItemAsync(BIOMETRIC_BACKUP_AVAILABLE_KEY);
     await SecureStore.deleteItemAsync(PIN_KEY);
+    await SecureStore.deleteItemAsync(PENDING_PIN_KEY);
     await SecureStore.deleteItemAsync(PIN_ATTEMPTS_KEY);
     cachedPinHash = null;
     clearSessionPin();
