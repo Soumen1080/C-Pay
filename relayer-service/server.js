@@ -104,7 +104,12 @@ app.get('/ingest/health', (_req, res) => {
   res.json(ingestWorker.getHealth());
 });
 
-app.get('/health', async (_req, res) => {
+// Keep the public probe free of infrastructure and account data.
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok' });
+});
+
+app.get('/health/detailed', requireAuthenticatedUser, async (_req, res) => {
   const [sponsorBalances, distributionBalances] = await Promise.all([
     getBalances(sponsorKeypair.publicKey()),
     getBalances(distributionKeypair.publicKey()),
@@ -147,7 +152,7 @@ app.get('/health', async (_req, res) => {
   });
 });
 
-app.get('/account/:accountId/status', async (req, res) => {
+app.get('/account/:accountId/status', requireAuthenticatedUser, requirePathWalletOwnership(), async (req, res) => {
   const accountId = assertAccountId(req.params.accountId, 'accountId');
   const [status, retryAfterSeconds] = await Promise.all([
     getAccountStatus(accountId),
@@ -161,7 +166,7 @@ app.get('/account/:accountId/status', async (req, res) => {
   });
 });
 
-app.get('/account/:accountId/balance', async (req, res) => {
+app.get('/account/:accountId/balance', requireAuthenticatedUser, requirePathWalletOwnership(), async (req, res) => {
   const accountId = assertAccountId(req.params.accountId, 'accountId');
   const balances = await getBalances(accountId);
   res.json({
@@ -940,6 +945,27 @@ function requireWalletOwnership(walletField) {
       req.resolvedWallets = ownedWallets;
     }
 
+    return next();
+  };
+}
+
+/** Verify that an authenticated user owns the wallet in a route parameter. */
+function requirePathWalletOwnership() {
+  return async function (req, res, next) {
+    if (!config.authRequired) return next();
+    const authUid = req.auth && req.auth.sub;
+    if (!authUid) {
+      return res.status(401).json({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
+    }
+    const ownedWallets = await resolveUserWallets(authUid);
+    if (ownedWallets === null) return next();
+    const requestedWallet = req.params.accountId;
+    if (!ownedWallets.includes(requestedWallet)) {
+      return res.status(403).json({
+        error: 'You are not authorized to view this wallet',
+        code: 'WALLET_OWNERSHIP_DENIED',
+      });
+    }
     return next();
   };
 }
