@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 import EventEmitter from 'eventemitter3';
 import { generateCPayId } from '../utils/cpayId';
-import { getNetworkConfig, isValidTransactionHash } from './blockchain';
+import { getNetworkConfig, isValidTransactionHash, isValidAccountId } from './blockchain';
 
 // Event emitter for real-time updates
 export const storageEvents = new EventEmitter();
@@ -167,7 +167,20 @@ export async function getTransactions(): Promise<Transaction[]> {
         return localTxs;
       }
 
-      // Fetch transactions from Supabase (both sent and received)
+      // Guard against filter-injection: validate the wallet address before
+      // interpolating it into the PostgREST .or() string.  supabase-js v2 only
+      // accepts .or() as a raw string (no parameter-object API), so strict
+      // call-boundary validation is the correct mitigation here.
+      // isValidAccountId uses the Stellar SDK's Ed25519 public-key checker,
+      // which rejects anything that isn't a well-formed G-account address.
+      if (!isValidAccountId(walletAddress)) {
+        console.warn('Skipping Supabase fetch: wallet address failed validation', walletAddress);
+        return localTxs;
+      }
+
+      // Fetch transactions from Supabase (both sent and received).
+      // walletAddress is a validated Stellar Ed25519 public key (56-char base32
+      // starting with "G"), so interpolation here cannot carry filter syntax.
       const { data, error } = await supabase
         .from('transactions')
         .select('*')

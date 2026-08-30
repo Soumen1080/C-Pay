@@ -11,7 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { requestAddMoney, getBalance, getTimeUntilNextAddMoney, formatTimeRemaining } from '../services/blockchain';
+import { requestAddMoney, getBalance, getTimeUntilNextAddMoney, formatTimeRemaining, isValidAccountId } from '../services/blockchain';
 import { startTransactionPolling, stopTransactionPolling } from '../services/transactionMonitor';
 import { getAuthenticatedWallet } from '../utils/biometric';
 import { getTransactions, saveTransaction, Transaction, storageEvents } from '../services/storage';
@@ -222,9 +222,22 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
     
     const setupRealtimeSubscription = async () => {
       if (!walletAddress) return;
+
+      // Guard against filter-injection: validate the wallet address before
+      // interpolating it into the PostgREST realtime filter string.
+      // supabase-js realtime only accepts filter as a raw string, so strict
+      // call-boundary validation is the correct mitigation here.
+      // isValidAccountId uses the Stellar SDK's Ed25519 public-key checker,
+      // which rejects anything that isn't a well-formed G-account address.
+      if (!isValidAccountId(walletAddress)) {
+        console.warn('Skipping realtime subscription: wallet address failed validation', walletAddress);
+        return;
+      }
       
       console.log('🔔 Setting up Supabase real-time subscription for:', walletAddress);
       
+      // walletAddress is a validated Stellar Ed25519 public key (56-char base32
+      // starting with "G"), so interpolation here cannot carry filter syntax.
       supabaseSubscription = supabase
         .channel('transactions')
         .on(
