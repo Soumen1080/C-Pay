@@ -26,7 +26,6 @@ import {
 } from '../services/cloudWalletBackup';
 import { cachePinForSession, hasWallet, recreateWalletFromSecret } from '../services/wallet';
 import { supabase } from '../services/supabase';
-import { getMerchantProfile } from '../services/merchant';
 import { COLORS, SPACING, TYPOGRAPHY, BORDER_RADIUS, SHADOWS } from '../constants/theme';
 import { AlertManager } from '../utils/alert';
 
@@ -325,7 +324,6 @@ export const RestoreWalletScreen: React.FC<RestoreWalletScreenProps> = ({ naviga
       cachePinForSession(pinToConfirm);
 
       // Background syncs — non-blocking
-      void getMerchantProfile(walletAddress).catch(() => {});
       void supabase
         .from('users')
         .update({ biometric_enabled: false })
