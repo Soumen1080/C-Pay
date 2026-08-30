@@ -45,8 +45,6 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
   const [loading, setLoading] = useState(false);
   const [balance, setBalance] = useState<string>('0');
   const [hideBalance, setHideBalance] = useState<boolean>(false);
-  const [merchantId, setMerchantId] = useState<string | null>(null);
-  const [isMerchantPayment, setIsMerchantPayment] = useState<boolean>(false);
   const [isFromQR, setIsFromQR] = useState<boolean>(false);
   const [hasPresetAmount, setHasPresetAmount] = useState<boolean>(false);
   const [fetchingRecipient, setFetchingRecipient] = useState<boolean>(false);
@@ -56,10 +54,6 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
   const paymentInProgress = useRef<boolean>(false);
   const networkTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const recipientLookupSeq = useRef<number>(0);
-  const routeMerchantId = typeof route?.params?.merchantId === 'string'
-    ? route.params.merchantId.trim()
-    : '';
-  const isExplicitMerchantRoute = Boolean(routeMerchantId);
 
   useEffect(() => {
     loadWalletData();
@@ -92,13 +86,6 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
     if (route?.params?.hideBalance === true) {
       setHideBalance(true);
     }
-    // Check if this is a merchant payment
-    if (routeMerchantId) {
-      setMerchantId(routeMerchantId);
-    } else {
-      setMerchantId(null);
-    }
-    setIsMerchantPayment(isExplicitMerchantRoute);
     if (route?.params?.isFromQR) {
       setIsFromQR(true);
     }
@@ -162,10 +149,6 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
       setRecipientName('');
       setRecipientCPayId('');
       setRecipientFetched(false);
-      if (!isExplicitMerchantRoute) {
-        setMerchantId(null);
-        setIsMerchantPayment(false);
-      }
       return;
     }
 
@@ -174,10 +157,6 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
       setRecipientName('');
       setRecipientCPayId('');
       setRecipientFetched(false);
-      if (!isExplicitMerchantRoute) {
-        setMerchantId(null);
-        setIsMerchantPayment(false);
-      }
       return;
     }
 
@@ -190,11 +169,6 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
 
       if (lookupSeq !== recipientLookupSeq.current) {
         return;
-      }
-
-      if (!isExplicitMerchantRoute) {
-        setMerchantId(null);
-        setIsMerchantPayment(false);
       }
 
       const displayName = name || fallbackName;
@@ -212,10 +186,6 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
       setRecipientName('');
       setRecipientCPayId('');
       setRecipientFetched(false);
-      if (!isExplicitMerchantRoute) {
-        setMerchantId(null);
-        setIsMerchantPayment(false);
-      }
     } finally {
       if (lookupSeq === recipientLookupSeq.current) {
         setFetchingRecipient(false);
@@ -316,7 +286,6 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
   const executePayment = async () => {
     if (paymentInProgress.current) return;
 
-    const effectiveMerchantId = merchantId;
     const effectiveRecipientName = recipientName;
     const effectiveRecipientCPayId = recipientCPayId;
     const displayId = effectiveRecipientCPayId || formatWalletFingerprint(recipientAddress);
@@ -377,7 +346,6 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
         recipientAddress.trim(),
         amount,
         {
-          merchantId: effectiveMerchantId,
           note,
         }
       );
@@ -399,16 +367,12 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
         amount: amount,
         status: 'pending' as const,
         internal_status: 'submitted' as const,
-        // For merchant payments: merchant_name is business name, recipient_name is same
-        // For personal payments: recipient_name is the person's name (if available)
-        merchant_name: effectiveMerchantId ? effectiveRecipientName : undefined,
         recipient_name: effectiveRecipientName || undefined,
         sender_name: senderName || undefined,
         note: note || undefined, // Separate note field
         created_at: new Date().toISOString(),
         submitted_at: new Date().toISOString(),
-        transaction_type: effectiveMerchantId ? 'merchant' as const : 'personal' as const,
-        merchant_id: effectiveMerchantId || undefined,
+        transaction_type: 'personal' as const,
       };
 
       saveTransaction(transactionData)
@@ -425,26 +389,24 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
         processingTime: processingTime || 2,
         timestamp: timestamp(),
         note: note || undefined,
-        isMerchantPayment: !!effectiveMerchantId,
       });
     } catch (error: any) {
-      paymentInProgress.current = false;
+      // Clear timeout on error
       if (networkTimeoutRef.current) clearTimeout(networkTimeoutRef.current);
+      paymentInProgress.current = false;
       setSubmitting(false);
-      setShowReview(false);
-      console.error('Send pilot credits error:', error);
 
-      const { errorMessage, errorReason, errorCode, category } = getPaymentFailureCopy(error);
+      const copy = getPaymentFailureCopy(error);
 
       // Navigate to Failure screen
       navigation.replace('PaymentFailure', {
         amount: amount,
         recipientName: effectiveRecipientName || displayId,
         recipientAddress: recipientAddress.trim(),
-        errorMessage,
-        errorReason,
-        errorCode,
-        category,
+        errorMessage: copy.errorMessage,
+        errorReason: copy.errorReason,
+        errorCode: copy.errorCode,
+        category: copy.category,
         timestamp: timestamp(),
       });
     }
@@ -479,23 +441,28 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
     }
   };
 
-  const isAmountValid = !!amount && parseFloat(amount) > 0;
-  const canSend = !!recipientAddress && isAmountValid;
-
   return (
     <Screen
+      preset="scroll"
       loading={loading || submitting}
       loadingText="Processing payment..."
       header={<Header title="Send Pilot Credits" onBack={handleBackPress} />}
-      footer={
+      bottomAction={
         <BottomActionBar>
           <Button
-            title={isAmountValid ? `Send ${formatMoneyAmount(parseFloat(amount))}` : 'Enter Amount to Send'}
+            title={`Send ${amount ? formatMoneyAmount(parseFloat(amount)) : MONEY_UNIT_LABEL}`}
             onPress={handleSendMoney}
             variant="primary"
             size="lg"
             fullWidth
-            disabled={!canSend || submitting}
+            disabled={
+              loading ||
+              submitting ||
+              fetchingRecipient ||
+              !recipientAddress.trim() ||
+              !amount ||
+              parseFloat(amount) <= 0
+            }
           />
         </BottomActionBar>
       }
@@ -516,13 +483,13 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
         <View style={styles.recipientCard}>
           <View style={styles.recipientCardHeader}>
             <Ionicons
-              name={isMerchantPayment ? 'storefront-outline' : 'person-outline'}
+              name="person-outline"
               size={23}
               color={COLORS.primary}
               style={styles.recipientCardIcon}
             />
             <Text style={styles.recipientCardTitle}>
-              {isMerchantPayment ? 'Paying Merchant' : 'Sending To'}
+              Sending To
             </Text>
           </View>
           <View style={styles.recipientCardContent}>
@@ -604,7 +571,6 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
         cpayId={recipientCPayId || formatWalletFingerprint(recipientAddress)}
         amount={amount}
         note={note}
-        isMerchant={isMerchantPayment}
         submitting={submitting}
         onConfirm={executePayment}
         onCancel={() => {

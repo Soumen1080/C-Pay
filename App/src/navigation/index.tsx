@@ -21,11 +21,6 @@ import { ProfileScreen } from '../screens/ProfileScreen';
 import { ScanScreen } from '../screens/ScanScreen';
 import { QRGeneratorScreen } from '../screens/QRGeneratorScreen';
 import { TransactionHistoryScreen } from '../screens/TransactionHistoryScreen';
-import { MerchantRegistrationScreen } from '../screens/MerchantRegistrationScreen';
-import { MerchantDashboardScreen } from '../screens/MerchantDashboardScreen';
-import { MerchantQRGeneratorScreen } from '../screens/MerchantQRGeneratorScreen';
-import { MerchantGlobalQRScreen } from '../screens/MerchantGlobalQRScreen';
-import { MerchantTransactionsScreen } from '../screens/MerchantTransactionsScreen';
 import { SendMoneyScreen } from '../screens/SendMoneyScreen';
 import { ProfileSetupScreen } from '../screens/ProfileSetupScreen';
 import { PaymentProcessingScreen } from '../screens/PaymentProcessingScreen';
@@ -63,20 +58,13 @@ type RootStackParamList = {
     recipientName?: string;
     note?: string;
     hideBalance?: boolean;
-    merchantId?: string;
-    isMerchantPayment?: boolean;
     isFromQR?: boolean;
   };
   PaymentProcessing: { amount: string; recipientName: string; recipientAddress: string };
-  PaymentSuccess: { transactionHash: string; fromAddress: string; amount: string; recipientName: string; recipientAddress: string; processingTime?: number; timestamp?: string; note?: string; isMerchantPayment?: boolean };
+  PaymentSuccess: { transactionHash: string; fromAddress: string; amount: string; recipientName: string; recipientAddress: string; processingTime?: number; timestamp?: string; note?: string };
   PaymentFailure: { amount: string; recipientName: string; recipientAddress: string; errorMessage?: string; errorReason?: string; errorCode?: string; category?: 'retryable' | 'support'; timestamp?: string };
   QRGenerator: undefined;
   TransactionHistory: { highlightTransaction?: string };
-  MerchantRegistration: undefined;
-  MerchantDashboard: undefined;
-  MerchantQRGenerator: undefined;
-  MerchantGlobalQR: undefined;
-  MerchantTransactions: undefined;
   SecurityCenter: undefined;
   Info: { doc: InfoDoc };
 };
@@ -89,6 +77,19 @@ type MainTabsParamList = {
 
 const Stack = createStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabsParamList>();
+
+const linking = {
+  prefixes: ['cpay://', 'https://cpay.app'],
+  config: {
+    screens: {
+      MerchantRegistration: 'MainTabs',
+      MerchantDashboard: 'MainTabs',
+      MerchantQRGenerator: 'MainTabs',
+      MerchantGlobalQR: 'MainTabs',
+      MerchantTransactions: 'MainTabs',
+    },
+  },
+};
 
 const TAB_BAR_CONTENT_HEIGHT = 56;
 const MIN_TAB_BAR_BOTTOM_PADDING = SPACING.sm;
@@ -170,7 +171,7 @@ const MainTabs = () => {
 
 export const Navigation = () => {
   return (
-    <NavigationContainer>
+    <NavigationContainer linking={linking}>
       <Stack.Navigator
         screenOptions={{
           headerShown: false,
@@ -245,41 +246,6 @@ export const Navigation = () => {
         <Stack.Screen 
           name="TransactionHistory" 
           component={TransactionHistoryScreen}
-          options={{
-            headerShown: false,
-          }}
-        />
-        <Stack.Screen 
-          name="MerchantRegistration" 
-          component={MerchantRegistrationScreen}
-          options={{
-            headerShown: false,
-          }}
-        />
-        <Stack.Screen 
-          name="MerchantDashboard" 
-          component={MerchantDashboardScreen}
-          options={{
-            headerShown: false,
-          }}
-        />
-        <Stack.Screen 
-          name="MerchantQRGenerator" 
-          component={MerchantQRGeneratorScreen}
-          options={{
-            headerShown: false,
-          }}
-        />
-        <Stack.Screen 
-          name="MerchantGlobalQR" 
-          component={MerchantGlobalQRScreen}
-          options={{
-            headerShown: false,
-          }}
-        />
-        <Stack.Screen
-          name="MerchantTransactions"
-          component={MerchantTransactionsScreen}
           options={{
             headerShown: false,
           }}
