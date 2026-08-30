@@ -52,11 +52,14 @@ export default function App() {
   const handlePINConfirm = async (pin: string) => {
     setPinDialogVisible(false);
 
-    const isValid = await verifyPin(pin);
+    const result = await verifyPin(pin);
 
-    if (isValid) {
+    if (result.success) {
       cachePinForSession(pin);
       pinDialogConfig.resolve?.(pin);
+    } else if (result.error === 'STORAGE_ERROR') {
+      AlertManager.alert('Storage Error', "Couldn't access secure storage — try again.", undefined, { type: 'error' });
+      pinDialogConfig.resolve?.(null);
     } else {
       AlertManager.alert('Incorrect PIN', 'The PIN you entered is incorrect', undefined, { type: 'error' });
       pinDialogConfig.resolve?.(null);

@@ -33,11 +33,14 @@ export const ChangePINScreen: React.FC<ChangePINScreenProps> = ({ navigation }) 
     
     try {
       // Use wallet.ts verifyPin function to check against SecureStore
-      const isValid = await verifyPin(pin);
+      const result = await verifyPin(pin);
       
-      if (isValid) {
+      if (result.success) {
         setCurrentPin(pin);
         setStep('new');
+      } else if (result.error === 'STORAGE_ERROR') {
+        setError("Couldn't access secure storage — try again.");
+        setTimeout(() => setCurrentPin(''), 300);
       } else {
         setError('Incorrect PIN. Please try again.');
         setTimeout(() => setCurrentPin(''), 300);

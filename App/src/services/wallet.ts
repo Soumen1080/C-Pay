@@ -147,6 +147,16 @@ type VerifyPinOptions = {
   blockMigration?: boolean;
 };
 
+export type WalletOperationError = 'INVALID_PIN' | 'STORAGE_ERROR';
+
+export type VerifyPinResult =
+  | { success: true }
+  | { success: false; error: WalletOperationError; rawError?: unknown };
+
+export type GetWalletResult =
+  | { success: true; wallet: StellarWallet }
+  | { success: false; wallet: null; error: WalletOperationError; rawError?: unknown };
+
 // ─── In-memory session state ──────────────────────────────────────────────────
 
 let cachedPinHash: string | null = null;
@@ -245,7 +255,8 @@ export async function getWalletFromSession(): Promise<StellarWallet | null> {
   const pin = getCachedPin();
   if (!pin) return null;
 
-  return getWallet(pin);
+  const res = await getWallet(pin);
+  return res.success ? res.wallet : null;
 }
 
 export async function createWallet(pin: string): Promise<string> {
@@ -260,21 +271,24 @@ export async function createWallet(pin: string): Promise<string> {
   return publicKey;
 }
 
-export async function getWallet(pin: string): Promise<StellarWallet | null> {
+export async function getWallet(pin: string): Promise<GetWalletResult> {
   try {
-    const isValidPin = await verifyPin(pin);
-    if (!isValidPin) {
-      throw new Error('Invalid PIN');
+    const pinResult = await verifyPin(pin);
+    if (!pinResult.success) {
+      return { success: false, wallet: null, error: pinResult.error, rawError: pinResult.rawError };
     }
 
     const secret = await readSecret(pin);
-    if (!secret) return null;
+    if (!secret) {
+      return { success: false, wallet: null, error: 'STORAGE_ERROR' };
+    }
 
     cachePinForSession(pin);
-    return cacheWalletForSession(secret);
+    const wallet = cacheWalletForSession(secret);
+    return { success: true, wallet };
   } catch (error) {
     console.error('Error getting wallet:', error);
-    return null;
+    return { success: false, wallet: null, error: 'STORAGE_ERROR', rawError: error };
   }
 }
 
@@ -297,7 +311,7 @@ export async function hasWallet(): Promise<boolean> {
   }
 }
 
-export async function verifyPin(pin: string, options: VerifyPinOptions = {}): Promise<boolean> {
+export async function verifyPin(pin: string, options: VerifyPinOptions = {}): Promise<VerifyPinResult> {
   try {
     const { migrate = true, blockMigration = true } = options;
     const candidates = [
@@ -336,18 +350,24 @@ export async function verifyPin(pin: string, options: VerifyPinOptions = {}): Pr
           });
         }
       }
+      return { success: true };
     }
 
-    return isValid;
+    return { success: false, error: 'INVALID_PIN' };
   } catch (error) {
     console.error('Error verifying PIN:', error);
-    return false;
+    return { success: false, error: 'STORAGE_ERROR', rawError: error };
   }
 }
 
 export async function changeWalletPin(oldPin: string, newPin: string): Promise<void> {
-  const isValidOldPin = await verifyPin(oldPin, { migrate: false });
-  if (!isValidOldPin) throw new Error('Invalid current PIN');
+  const pinResult = await verifyPin(oldPin, { migrate: false });
+  if (!pinResult.success) {
+    if (pinResult.error === 'STORAGE_ERROR') {
+      throw new Error("Couldn't access secure storage — try again.");
+    }
+    throw new Error('Invalid current PIN');
+  }
 
   const secret = await readSecret(oldPin);
   if (!secret) throw new Error('Wallet not found');

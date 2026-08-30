@@ -191,35 +191,85 @@ describe('clearSessionPin', () => {
   });
 });
 
-describe('verifyPin — migration path', () => {
+describe('verifyPin & getWallet — result discrimination & error handling', () => {
   beforeEach(() => {
     jest.resetModules();
     resetStore();
   });
 
-  test('parses a legacy raw-hex verifier (no JSON) and flags needsMigration', async () => {
-    // Write a legacy verifier stored as raw hex (pre-v2 format).
-    // We cannot call storePinVerifier directly (it's private), so we write
-    // a crafted raw hex value and exercise parsePinVerifier via verifyPin.
-    // The easiest approach is to verify that verifyPin returns false for an
-    // intentionally wrong value stored in legacy format (regression guard).
+  test('parses a legacy raw-hex verifier (no JSON) and returns INVALID_PIN when hash does not match', async () => {
     const SecureStoreMock = getSecureStoreMock();
     const { verifyPin } = require('../../services/wallet');
 
-    // Write a fake legacy hex hash (32 bytes = 64 hex chars) as the raw value.
     const fakeHex = '0'.repeat(64);
     await SecureStoreMock.setItemAsync('cpay_pin_hash', fakeHex);
     await SecureStoreMock.setItemAsync('cpay_pin_salt', '0'.repeat(32));
 
-    // The stored hash won't match any real PIN so verifyPin must return false.
     const result = await verifyPin('000000');
-    expect(result).toBe(false);
+    expect(result).toEqual({ success: false, error: 'INVALID_PIN' });
   });
 
-  test('verifyPin returns false when no verifier is stored', async () => {
+  test('verifyPin returns INVALID_PIN when no verifier is stored', async () => {
     const { verifyPin } = require('../../services/wallet');
     const result = await verifyPin('123456');
-    expect(result).toBe(false);
+    expect(result).toEqual({ success: false, error: 'INVALID_PIN' });
+  });
+
+  test('verifyPin returns STORAGE_ERROR when SecureStore throws an error', async () => {
+    const SecureStoreMock = getSecureStoreMock();
+    const { verifyPin } = require('../../services/wallet');
+
+    jest.spyOn(SecureStoreMock, 'getItemAsync').mockRejectedValueOnce(new Error('SecureStore disk failure'));
+
+    const result = await verifyPin('123456');
+    expect(result).toEqual({
+      success: false,
+      error: 'STORAGE_ERROR',
+      rawError: expect.any(Error),
+    });
+  });
+
+  test('getWallet returns INVALID_PIN when wrong PIN is supplied', async () => {
+    const { createWallet, getWallet } = require('../../services/wallet');
+    await createWallet('123456');
+
+    const result = await getWallet('999999');
+    expect(result).toEqual({ success: false, wallet: null, error: 'INVALID_PIN', rawError: undefined });
+  });
+
+  test('getWallet returns STORAGE_ERROR when SecureStore read fails', async () => {
+    const SecureStoreMock = getSecureStoreMock();
+    const { createWallet, getWallet } = require('../../services/wallet');
+    await createWallet('123456');
+
+    jest.spyOn(SecureStoreMock, 'getItemAsync').mockRejectedValueOnce(new Error('SecureStore unhandled failure'));
+
+    const result = await getWallet('123456');
+    expect(result).toEqual({
+      success: false,
+      wallet: null,
+      error: 'STORAGE_ERROR',
+      rawError: expect.any(Error),
+    });
+  });
+
+  test('storage error during PIN check does not increment attempt count', async () => {
+    const SecureStoreMock = getSecureStoreMock();
+    const { verifyPin, getPinAttemptState, recordFailedPinAttempt } = require('../../services/wallet');
+
+    jest.spyOn(SecureStoreMock, 'getItemAsync').mockRejectedValueOnce(new Error('Transient storage error'));
+
+    const result = await verifyPin('123456');
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('STORAGE_ERROR');
+
+    // Emulate UI logic: recordFailedPinAttempt is ONLY called on INVALID_PIN, NOT on STORAGE_ERROR
+    if (result.error === 'INVALID_PIN') {
+      await recordFailedPinAttempt();
+    }
+
+    const state = await getPinAttemptState();
+    expect(state.attempts).toBe(0);
   });
 });
 
