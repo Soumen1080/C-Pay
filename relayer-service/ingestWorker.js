@@ -43,6 +43,7 @@ class IngestWorker {
 
     // Cache of known wallet addresses to user IDs
     this.walletUserCache = new Map();
+    this.merchantWalletCache = new Map();
     this.lastCacheRefresh = 0;
   }
 
@@ -163,8 +164,23 @@ class IngestWorker {
             this.walletUserCache.set(u.wallet_address, u.id);
           }
         }
-        this.lastCacheRefresh = now;
       }
+
+      try {
+        const merchants = await this.supabaseRequest('merchants?select=id,wallet_address,business_name');
+        if (Array.isArray(merchants)) {
+          this.merchantWalletCache.clear();
+          for (const m of merchants) {
+            if (m.wallet_address) {
+              this.merchantWalletCache.set(m.wallet_address, { id: m.id, business_name: m.business_name });
+            }
+          }
+        }
+      } catch (_) {
+        // Merchants table might be empty or unconfigured
+      }
+
+      this.lastCacheRefresh = now;
     } catch (err) {
       console.warn('[IngestWorker] Failed to refresh wallet cache:', err.message);
     }
@@ -274,12 +290,20 @@ class IngestWorker {
     const toUserId = this.walletUserCache.get(details.to_address) || null;
     const matchedUserId = fromUserId || toUserId;
 
+    // Match merchant
+    const merchantInfo = this.merchantWalletCache.get(details.to_address);
+    const transactionType = merchantInfo ? 'merchant' : 'personal';
+    const merchantId = merchantInfo ? merchantInfo.id : null;
+    const recipientName = merchantInfo ? (merchantInfo.business_name || null) : null;
+
     // Ingest into Supabase
     if (this.isConfigured) {
       await this.upsertTransaction({
         tx_hash: details.tx_hash,
         op_index: details.op_index,
-        transaction_type: 'personal',
+        transaction_type: transactionType,
+        merchant_id: merchantId,
+        recipient_name: recipientName,
         from_address: details.from_address,
         to_address: details.to_address,
         amount: details.amount,
