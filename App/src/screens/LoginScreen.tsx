@@ -159,14 +159,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
         return;
       }
 
-      const isValid = await verifyPin(pinToVerify, { blockMigration: false });
+      const result = await verifyPin(pinToVerify, { blockMigration: false });
 
-      if (isValid) {
+      if (result.success) {
         await clearPinAttempts();
         setAttemptCount(0);
         setLockoutMs(0);
         cachePinForSession(pinToVerify);
         await navigateAfterWalletUnlock();
+      } else if (result.error === 'STORAGE_ERROR') {
+        setError("Couldn't access secure storage — try again.");
+        setPin('');
       } else {
         const nextState = await recordFailedPinAttempt();
         setAttemptCount(nextState.attempts);

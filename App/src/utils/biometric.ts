@@ -40,12 +40,12 @@ export async function authenticateWithPIN(): Promise<boolean> {
       return false;
     }
 
-    const isValid = await verifyPin(inputPin);
-    if (isValid) {
+    const result = await verifyPin(inputPin);
+    if (result.success) {
       cachePinForSession(inputPin);
     }
 
-    return isValid;
+    return result.success;
   } catch (error) {
     console.error('PIN authentication error:', error);
     return false;
@@ -92,12 +92,13 @@ export async function getAuthenticatedWallet(
     return null;
   }
 
-  const wallet = await getWallet(inputPin);
-  if (wallet) {
+  const res = await getWallet(inputPin);
+  if (res.success && res.wallet) {
     cachePinForSession(inputPin);
+    return res.wallet;
   }
 
-  return wallet;
+  return null;
 }
 
 /**
@@ -227,7 +228,10 @@ export async function enableBiometric(options: { skipAvailabilityCheck?: boolean
       );
 
       if (pin) {
-        wallet = await getWallet(pin);
+        const res = await getWallet(pin);
+        if (res.success) {
+          wallet = res.wallet;
+        }
       }
     }
 
