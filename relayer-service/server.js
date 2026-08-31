@@ -128,9 +128,10 @@ app.get('/health/detailed', requireAuthenticatedUser, async (_req, res) => {
 
 app.get('/account/:accountId/status', requireAuthenticatedUser, requirePathWalletOwnership(), async (req, res) => {
   const accountId = assertAccountId(req.params.accountId, 'accountId');
+  const authUserId = req.auth && req.auth.sub ? req.auth.sub : null;
   const [status, retryAfterSeconds] = await Promise.all([
     getAccountStatus(accountId),
-    getAddMoneyRetryAfterSeconds(accountId),
+    getAddMoneyRetryAfterSeconds(accountId, authUserId),
   ]);
 
   res.json({
@@ -306,6 +307,8 @@ app.post('/add-money', requireAuthenticatedUser, requireWalletOwnership('account
   const accountId = assertAccountId(req.body.accountId, 'accountId');
   const amount = normalizeAmount(req.body.amount || config.addMoneyAmount, config.maxAddMoneyAmount);
   const idempotencyKey = normalizeOptionalString(req.body.idempotencyKey);
+  const authUserId = req.auth && req.auth.sub ? req.auth.sub : null;
+  const userLockKey = `add-money-user:${authUserId || accountId}`;
 
   if (idempotencyKey) {
     const lock = await acquireIdempotencyLock(idempotencyKey, config.idempotencyTtlMs);
@@ -321,72 +324,98 @@ app.post('/add-money', requireAuthenticatedUser, requireWalletOwnership('account
     }
   }
 
-  const status = await getAccountStatus(accountId);
-  if (!status.exists || !status.hasTrustline) {
-    return res.status(409).json({
-      error: 'Account is not ready to receive Add Money balance',
-      code: 'ACCOUNT_NOT_READY',
-    });
-  }
-
-  const retryAfterSeconds = await getAddMoneyRetryAfterSeconds(accountId);
-  if (retryAfterSeconds > 0) {
+  // Acquire user-level lock to prevent concurrent claims (race condition)
+  const userLock = await acquireAddMoneyUserLock(userLockKey, config.transactionTimeoutSeconds * 1000 + 5000);
+  if (!userLock.acquired) {
     return res.status(429).json({
-      error: 'Add Money is cooling down for this account',
-      code: 'ADD_MONEY_COOLDOWN',
-      retryAfterSeconds,
+      error: 'An Add Money request is already in progress for this account',
+      code: 'ADD_MONEY_IN_FLIGHT',
+      retryAfterSeconds: 5,
     });
   }
 
-  const distributionBalances = await getBalances(distributionKeypair.publicKey());
-  if (Number(distributionBalances.asset || '0') < Number(amount)) {
-    return res.status(503).json({
-      error: `Add Money is temporarily unavailable because the relayer distribution account has insufficient ${config.assetCode}.`,
-      code: 'DISTRIBUTION_LOW_ASSET',
-      distributionBalance: distributionBalances.asset,
-      requiredAmount: amount,
-    });
-  }
+  try {
+    const status = await getAccountStatus(accountId);
+    if (!status.exists || !status.hasTrustline) {
+      return res.status(409).json({
+        error: 'Account is not ready to receive Add Money balance',
+        code: 'ACCOUNT_NOT_READY',
+      });
+    }
 
-  const distributionAccount = await server.loadAccount(distributionKeypair.publicKey());
-  const tx = new StellarSdk.TransactionBuilder(distributionAccount, {
-    fee: config.baseFee,
-    networkPassphrase: config.passphrase,
-  })
-    .addOperation(StellarSdk.Operation.payment({
-      destination: accountId,
-      asset: cpinrAsset,
+    const retryAfterSeconds = await getAddMoneyRetryAfterSeconds(accountId, authUserId);
+    if (retryAfterSeconds > 0) {
+      return res.status(429).json({
+        error: 'Add Money is cooling down for this account',
+        code: 'ADD_MONEY_COOLDOWN',
+        retryAfterSeconds,
+      });
+    }
+
+    const dailyCapCheck = await checkAddMoneyDailyCap(accountId, authUserId, amount);
+    if (!dailyCapCheck.allowed) {
+      return res.status(429).json({
+        error: 'Daily Add Money limit reached. Please try again later.',
+        code: 'ADD_MONEY_DAILY_CAP_EXCEEDED',
+        retryAfterSeconds: dailyCapCheck.retryAfterSeconds,
+        dailyCap: config.maxAddMoneyDailyCap,
+        claimedToday: dailyCapCheck.totalClaimed,
+      });
+    }
+
+    const distributionBalances = await getBalances(distributionKeypair.publicKey());
+    if (Number(distributionBalances.asset || '0') < Number(amount)) {
+      return res.status(503).json({
+        error: `Add Money is temporarily unavailable because the relayer distribution account has insufficient ${config.assetCode}.`,
+        code: 'DISTRIBUTION_LOW_ASSET',
+        distributionBalance: distributionBalances.asset,
+        requiredAmount: amount,
+      });
+    }
+
+    const distributionAccount = await server.loadAccount(distributionKeypair.publicKey());
+    const tx = new StellarSdk.TransactionBuilder(distributionAccount, {
+      fee: config.baseFee,
+      networkPassphrase: config.passphrase,
+    })
+      .addOperation(StellarSdk.Operation.payment({
+        destination: accountId,
+        asset: cpinrAsset,
+        amount,
+      }))
+      .addMemo(StellarSdk.Memo.text('add-money'))
+      .setTimeout(config.transactionTimeoutSeconds)
+      .build();
+
+    tx.sign(distributionKeypair);
+
+    const result = await server.submitTransaction(tx);
+    const response = {
+      hash: result.hash,
+      ledger: result.ledger,
+      status: 'success',
       amount,
-    }))
-    .addMemo(StellarSdk.Memo.text('add-money'))
-    .setTimeout(config.transactionTimeoutSeconds)
-    .build();
+      assetCode: config.assetCode,
+    };
 
-  tx.sign(distributionKeypair);
+    const nextAvailableAt = new Date(Date.now() + config.addMoneyCooldownMs).toISOString();
+    await recordAddMoneyClaim({
+      walletAddress: accountId,
+      authUserId,
+      amount,
+      txHash: result.hash,
+      idempotencyKey,
+      nextAvailableAt,
+    });
 
-  const result = await server.submitTransaction(tx);
-  const response = {
-    hash: result.hash,
-    ledger: result.ledger,
-    status: 'success',
-    amount,
-    assetCode: config.assetCode,
-  };
+    if (idempotencyKey) {
+      await setIdempotencyResponse(idempotencyKey, response, config.idempotencyTtlMs);
+    }
 
-  const nextAvailableAt = new Date(Date.now() + config.addMoneyCooldownMs).toISOString();
-  await recordAddMoneyClaim({
-    walletAddress: accountId,
-    amount,
-    txHash: result.hash,
-    idempotencyKey,
-    nextAvailableAt,
-  });
-
-  if (idempotencyKey) {
-    await setIdempotencyResponse(idempotencyKey, response, config.idempotencyTtlMs);
+    return res.json(response);
+  } finally {
+    await releaseAddMoneyUserLock(userLockKey);
   }
-
-  res.json(response);
 });
 
 app.get('/tx/:hash', async (req, res) => {
@@ -495,6 +524,7 @@ function loadConfig() {
     trustlineLimit: process.env.TRUSTLINE_LIMIT || '1000000000',
     addMoneyAmount: process.env.ADD_MONEY_AMOUNT || '100',
     maxAddMoneyAmount: Number(process.env.MAX_ADD_MONEY_AMOUNT || 1000),
+    maxAddMoneyDailyCap: Number(process.env.MAX_ADD_MONEY_DAILY_CAP || process.env.ADD_MONEY_DAILY_CAP || 1000),
     maxPaymentAmount: Number(process.env.MAX_PAYMENT_AMOUNT || 100000),
     addMoneyCooldownMs: Number(process.env.ADD_MONEY_COOLDOWN_MS || 24 * 60 * 60 * 1000),
     idempotencyTtlMs: Number(process.env.IDEMPOTENCY_TTL_MS || 10 * 60 * 1000),
@@ -932,25 +962,79 @@ async function getAccountStatus(accountId) {
   }
 }
 
-async function getAddMoneyRetryAfterSeconds(accountId) {
-  const persistedRetryAfter = await getPersistedAddMoneyRetryAfterSeconds(accountId);
+const activeAddMoneyUserLocks = new Map();
+
+async function acquireAddMoneyUserLock(userLockKey, ttlMs) {
+  const now = Date.now();
+  const existingExpiry = activeAddMoneyUserLocks.get(userLockKey);
+  if (existingExpiry && existingExpiry > now) {
+    return { acquired: false };
+  }
+  activeAddMoneyUserLocks.set(userLockKey, now + ttlMs);
+
+  if (isSupabasePersistenceEnabled()) {
+    try {
+      await supabaseRestRequest('relayer_idempotency_keys', {
+        method: 'POST',
+        headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify({
+          key: userLockKey,
+          response: null,
+          expires_at: new Date(now + ttlMs).toISOString(),
+        }),
+      });
+    } catch (error) {
+      if (error?.message?.includes('409') || error?.status === 409 || error?.response?.status === 409) {
+        activeAddMoneyUserLocks.delete(userLockKey);
+        return { acquired: false };
+      }
+    }
+  }
+
+  return { acquired: true };
+}
+
+async function releaseAddMoneyUserLock(userLockKey) {
+  activeAddMoneyUserLocks.delete(userLockKey);
+  if (isSupabasePersistenceEnabled()) {
+    try {
+      const query = new URLSearchParams({ key: `eq.${userLockKey}` });
+      await supabaseRestRequest(`relayer_idempotency_keys?${query.toString()}`, {
+        method: 'DELETE',
+        headers: { Prefer: 'return=minimal' },
+      });
+    } catch {
+      // Best-effort cleanup
+    }
+  }
+}
+
+async function getAddMoneyRetryAfterSeconds(accountId, authUserId) {
+  const persistedRetryAfter = await getPersistedAddMoneyRetryAfterSeconds(accountId, authUserId);
   return persistedRetryAfter;
 }
 
-async function getPersistedAddMoneyRetryAfterSeconds(accountId) {
+async function getPersistedAddMoneyRetryAfterSeconds(accountId, authUserId) {
   if (!isSupabasePersistenceEnabled()) {
     return 0;
   }
 
   try {
+    let filter;
+    if (authUserId) {
+      filter = `or=(auth_user_id.eq.${encodeURIComponent(authUserId)},wallet_address.eq.${encodeURIComponent(accountId)})`;
+    } else {
+      filter = `wallet_address=eq.${encodeURIComponent(accountId)}`;
+    }
+
     const query = new URLSearchParams({
       select: 'next_available_at',
-      wallet_address: `eq.${accountId}`,
       next_available_at: `gt.${new Date().toISOString()}`,
       order: 'next_available_at.desc',
       limit: '1',
     });
-    const rows = await supabaseRestRequest(`add_money_claims?${query.toString()}`, {
+
+    const rows = await supabaseRestRequest(`add_money_claims?${filter}&${query.toString()}`, {
       method: 'GET',
       headers: { Accept: 'application/json' },
     });
@@ -967,8 +1051,61 @@ async function getPersistedAddMoneyRetryAfterSeconds(accountId) {
   }
 }
 
+async function checkAddMoneyDailyCap(accountId, authUserId, requestedAmount) {
+  if (!isSupabasePersistenceEnabled() || !config.maxAddMoneyDailyCap) {
+    return { allowed: true, totalClaimed: 0, retryAfterSeconds: 0 };
+  }
+
+  try {
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    let filter;
+    if (authUserId) {
+      filter = `or=(auth_user_id.eq.${encodeURIComponent(authUserId)},wallet_address.eq.${encodeURIComponent(accountId)})`;
+    } else {
+      filter = `wallet_address=eq.${encodeURIComponent(accountId)}`;
+    }
+
+    const query = new URLSearchParams({
+      select: 'amount,claimed_at',
+      claimed_at: `gte.${oneDayAgo}`,
+      order: 'claimed_at.asc',
+    });
+
+    const rows = await supabaseRestRequest(`add_money_claims?${filter}&${query.toString()}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return { allowed: true, totalClaimed: 0, retryAfterSeconds: 0 };
+    }
+
+    const totalClaimed = rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const numRequested = Number(requestedAmount || 0);
+
+    if (totalClaimed + numRequested > config.maxAddMoneyDailyCap) {
+      const oldestClaimTime = new Date(rows[0].claimed_at).getTime();
+      const resetTime = oldestClaimTime + 24 * 60 * 60 * 1000;
+      const remainingMs = resetTime - Date.now();
+      const retryAfterSeconds = remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 3600;
+
+      return {
+        allowed: false,
+        totalClaimed,
+        retryAfterSeconds,
+      };
+    }
+
+    return { allowed: true, totalClaimed, retryAfterSeconds: 0 };
+  } catch (error) {
+    console.warn('Add Money daily cap check skipped:', error.message);
+    return { allowed: true, totalClaimed: 0, retryAfterSeconds: 0 };
+  }
+}
+
 async function recordAddMoneyClaim({
   walletAddress,
+  authUserId,
   amount,
   txHash,
   idempotencyKey,
@@ -982,6 +1119,7 @@ async function recordAddMoneyClaim({
     const conflictColumn = idempotencyKey ? 'idempotency_key' : 'tx_hash';
     const row = {
       wallet_address: walletAddress,
+      auth_user_id: authUserId || null,
       amount,
       asset_code: config.assetCode,
       asset_issuer: config.assetIssuer,

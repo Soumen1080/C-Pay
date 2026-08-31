@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS merchant_qr_codes (
 CREATE TABLE IF NOT EXISTS add_money_claims (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     wallet_address TEXT NOT NULL,
+    auth_user_id TEXT,
     amount NUMERIC(20, 7) NOT NULL CHECK (amount > 0),
     asset_code TEXT NOT NULL DEFAULT 'CPINR',
     asset_issuer TEXT,
@@ -224,6 +225,7 @@ CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_a
 CREATE INDEX IF NOT EXISTS idx_transactions_merchant_id ON transactions(merchant_id);
 CREATE INDEX IF NOT EXISTS idx_merchant_qr_codes_merchant_id ON merchant_qr_codes(merchant_id);
 CREATE INDEX IF NOT EXISTS idx_add_money_claims_wallet_address ON add_money_claims(wallet_address);
+CREATE INDEX IF NOT EXISTS idx_add_money_claims_auth_user_id ON add_money_claims(auth_user_id);
 CREATE INDEX IF NOT EXISTS idx_add_money_claims_claimed_at ON add_money_claims(claimed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_relayer_idempotency_expires_at ON relayer_idempotency_keys(expires_at);
 CREATE INDEX IF NOT EXISTS idx_contract_intent_cache_expires_at ON contract_intent_cache(expires_at);
