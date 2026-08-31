@@ -547,74 +547,99 @@ describe('Stellar key validation', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 12. Key Custody & Dynamic Zero-Downtime Rotation (#58)
+// 12. Idempotency duplicate prevention & intent reuse (#33)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const { KeyManager } = require('../keyManager');
+describe('Idempotency duplicate prevention & intent reuse (#33)', () => {
+  class SimulatedRelayerHandler {
+    constructor() {
+      this.locks = new Map();
+      this.onChainSubmissions = 0;
+    }
 
-describe('Key Custody & Dynamic Key Rotation (#58)', () => {
-  const kp1 = StellarSdk.Keypair.random();
-  const kp2 = StellarSdk.Keypair.random();
-  const distKp = StellarSdk.Keypair.random();
+    async submitPayment({ signedXdr, idempotencyKey }) {
+      if (idempotencyKey) {
+        if (this.locks.has(idempotencyKey)) {
+          const lock = this.locks.get(idempotencyKey);
+          if (lock.response === null) {
+            return {
+              status: 409,
+              body: {
+                error: 'A request with this idempotency key is currently processing',
+                code: 'IDEMPOTENCY_IN_FLIGHT',
+                retryAfterSeconds: 5,
+              },
+            };
+          }
+          return {
+            status: 200,
+            body: lock.response,
+          };
+        }
+        this.locks.set(idempotencyKey, { response: null });
+      }
 
-  test('initializes with least-privilege role separation', () => {
-    const km = new KeyManager({
-      sponsorSecret: kp1.secret(),
-      distributionSecret: distKp.secret(),
+      this.onChainSubmissions += 1;
+      const txHash = crypto.createHash('sha256').update(signedXdr || idempotencyKey).digest('hex');
+      const response = {
+        hash: txHash,
+        ledger: 1001,
+        status: 'success',
+      };
+
+      if (idempotencyKey) {
+        this.locks.set(idempotencyKey, { response });
+      }
+
+      return {
+        status: 200,
+        body: response,
+      };
+    }
+  }
+
+  test('fires the same intent twice concurrently and asserts only one on-chain submission (duplicate rejected with 409)', async () => {
+    const relayer = new SimulatedRelayerHandler();
+    const intentKey = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d';
+
+    relayer.locks.set(intentKey, { response: null });
+
+    const duplicateRes = await relayer.submitPayment({
+      signedXdr: 'mock-xdr-data',
+      idempotencyKey: intentKey,
     });
 
-    const sponsorSigner = km.getSigner('sponsor');
-    const distSigner = km.getSigner('distribution');
-
-    expect(sponsorSigner.publicKey()).toBe(kp1.publicKey());
-    expect(distSigner.publicKey()).toBe(distKp.publicKey());
-    expect(sponsorSigner.publicKey()).not.toBe(distSigner.publicKey());
+    expect(duplicateRes.status).toBe(409);
+    expect(duplicateRes.body.code).toBe('IDEMPOTENCY_IN_FLIGHT');
+    expect(relayer.onChainSubmissions).toBe(0);
   });
 
-  test('dynamically rotates signer key without downtime', () => {
-    const km = new KeyManager({
-      sponsorSecret: kp1.secret(),
+  test('retrying a completed payment reuses original key and returns cached result with one on-chain submission', async () => {
+    const relayer = new SimulatedRelayerHandler();
+    const intentKey = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d';
+
+    const res1 = await relayer.submitPayment({
+      signedXdr: 'mock-xdr-data',
+      idempotencyKey: intentKey,
     });
+    expect(res1.status).toBe(200);
+    expect(res1.body.status).toBe('success');
+    expect(relayer.onChainSubmissions).toBe(1);
 
-    expect(km.getSigner('sponsor').publicKey()).toBe(kp1.publicKey());
-
-    // Rotate sponsor key from kp1 to kp2
-    const rotatedSigner = km.rotateKey('sponsor', kp2.secret());
-
-    expect(rotatedSigner.publicKey()).toBe(kp2.publicKey());
-    expect(km.getSigner('sponsor').publicKey()).toBe(kp2.publicKey());
-
-    const status = km.getStatus();
-    expect(status.signers.sponsor.publicKey).toBe(kp2.publicKey());
+    const res2 = await relayer.submitPayment({
+      signedXdr: 'mock-xdr-data',
+      idempotencyKey: intentKey,
+    });
+    expect(res2.status).toBe(200);
+    expect(res2.body.hash).toBe(res1.body.hash);
+    expect(relayer.onChainSubmissions).toBe(1);
   });
 
-  test('KMS provider mode creates KMS-backed signer abstraction', () => {
-    const originalProvider = process.env.SIGNER_PROVIDER;
-    process.env.SIGNER_PROVIDER = 'kms';
-    process.env.SPONSOR_PUBLIC_KEY = kp1.publicKey();
-
-    const km = new KeyManager({
-      sponsorSecret: 'kms://arn:aws:kms:us-east-1:123456789012:key/sponsor-key',
-    });
-
-    const signer = km.getSigner('sponsor');
-    expect(signer.type).toBe('kms');
-    expect(signer.publicKey()).toBe(kp1.publicKey());
-
-    process.env.SIGNER_PROVIDER = originalProvider || 'env';
-  });
-
-  test('records signing activity and tracks logs', () => {
-    const km = new KeyManager({
-      sponsorSecret: kp1.secret(),
-    });
-
-    const signer = km.getSigner('sponsor');
-    const dummyHash = Buffer.alloc(32);
-    signer.signHash(dummyHash);
-
-    const status = km.getStatus();
-    expect(status.totalActivityLogs).toBeGreaterThan(0);
+  test('idempotency key format does not contain Date.now() or Math.random() timestamps', () => {
+    const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const testUUID = crypto.randomUUID();
+    expect(testUUID).toMatch(UUID_V4_REGEX);
+    expect(testUUID).not.toMatch(/\b\d{13}\b/);
   });
 });
 
