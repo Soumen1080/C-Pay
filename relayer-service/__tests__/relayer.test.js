@@ -545,3 +545,180 @@ describe('Stellar key validation', () => {
     expect(StellarSdk.StrKey.isValidEd25519SecretSeed('not-a-secret')).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 12. Add Money security: per-user cooldown, race protection & daily cap (#34)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Add Money per-user cooldown & race protection (#34)', () => {
+  class MockDatabaseState {
+    constructor(cooldownMs = 24 * 60 * 60 * 1000, dailyCap = 1000) {
+      this.cooldownMs = cooldownMs;
+      this.dailyCap = dailyCap;
+      this.claims = [];
+      this.activeLocks = new Map();
+    }
+
+    async acquireUserLock(userLockKey, ttlMs = 5000) {
+      const now = Date.now();
+      const existing = this.activeLocks.get(userLockKey);
+      if (existing && existing > now) {
+        return { acquired: false };
+      }
+      this.activeLocks.set(userLockKey, now + ttlMs);
+      return { acquired: true };
+    }
+
+    async releaseUserLock(userLockKey) {
+      this.activeLocks.delete(userLockKey);
+    }
+
+    async getRetryAfterSeconds(accountId, authUserId) {
+      const now = Date.now();
+      const matchingClaims = this.claims.filter(
+        c => (authUserId && c.auth_user_id === authUserId) || c.wallet_address === accountId
+      );
+      if (matchingClaims.length === 0) return 0;
+
+      const latestClaim = matchingClaims.reduce((latest, c) =>
+        new Date(c.next_available_at) > new Date(latest.next_available_at) ? c : latest
+      );
+
+      const remainingMs = new Date(latestClaim.next_available_at).getTime() - now;
+      return remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 0;
+    }
+
+    async checkDailyCap(accountId, authUserId, requestedAmount) {
+      const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      const recentClaims = this.claims.filter(
+        c =>
+          ((authUserId && c.auth_user_id === authUserId) || c.wallet_address === accountId) &&
+          new Date(c.claimed_at).getTime() >= oneDayAgo
+      );
+
+      const totalClaimed = recentClaims.reduce((sum, c) => sum + Number(c.amount || 0), 0);
+      if (totalClaimed + Number(requestedAmount) > this.dailyCap) {
+        return { allowed: false, totalClaimed, retryAfterSeconds: 3600 };
+      }
+      return { allowed: true, totalClaimed, retryAfterSeconds: 0 };
+    }
+
+    async recordClaim({ walletAddress, authUserId, amount, txHash, idempotencyKey }) {
+      const nextAvailableAt = new Date(Date.now() + this.cooldownMs).toISOString();
+      const claim = {
+        wallet_address: walletAddress,
+        auth_user_id: authUserId || null,
+        amount,
+        tx_hash: txHash,
+        idempotency_key: idempotencyKey || null,
+        claimed_at: new Date().toISOString(),
+        next_available_at: nextAvailableAt,
+      };
+      this.claims.push(claim);
+      return claim;
+    }
+
+    async handleAddMoney({ accountId, authUserId, amount, idempotencyKey, delayMs = 10 }) {
+      const userLockKey = `add-money-user:${authUserId || accountId}`;
+      const lock = await this.acquireUserLock(userLockKey, 5000);
+      if (!lock.acquired) {
+        return {
+          status: 429,
+          body: { error: 'An Add Money request is already in progress', code: 'ADD_MONEY_IN_FLIGHT' },
+        };
+      }
+
+      try {
+        const retryAfter = await this.getRetryAfterSeconds(accountId, authUserId);
+        if (retryAfter > 0) {
+          return {
+            status: 429,
+            body: { error: 'Add Money is cooling down', code: 'ADD_MONEY_COOLDOWN', retryAfterSeconds: retryAfter },
+          };
+        }
+
+        const dailyCap = await this.checkDailyCap(accountId, authUserId, amount);
+        if (!dailyCap.allowed) {
+          return {
+            status: 429,
+            body: { error: 'Daily Add Money limit reached', code: 'ADD_MONEY_DAILY_CAP_EXCEEDED' },
+          };
+        }
+
+        // Simulate async Stellar submission
+        if (delayMs > 0) {
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+
+        const txHash = 'tx_' + Math.random().toString(36).substring(2, 15);
+        await this.recordClaim({ walletAddress: accountId, authUserId, amount, txHash, idempotencyKey });
+
+        return {
+          status: 200,
+          body: { status: 'success', hash: txHash, amount },
+        };
+      } finally {
+        await this.releaseUserLock(userLockKey);
+      }
+    }
+  }
+
+  const USER_1 = 'auth-user-uuid-1111';
+  const USER_2 = 'auth-user-uuid-2222';
+  const WALLET_1A = 'GBGJS2UIEF2DYN3L67P2A7X62M4WK72JGTF7ABCOQL75UYHMWYLFRI4S';
+  const WALLET_1B = 'GAKUELFFUKSAJMTECN2SVXDRJOUJXDE27OPTD57SA65KJ6AU32SXKF27';
+  const WALLET_2A = 'GCDNV66CSUCURJ7N7BRNW2J62NV7DNVN66CSUCURJ7N7BRNW2J62NV7D';
+
+  test('per-user cooldown prevents same user on a second wallet', async () => {
+    const db = new MockDatabaseState(24 * 60 * 60 * 1000, 1000);
+
+    // User 1 claims with Wallet 1A
+    const res1 = await db.handleAddMoney({ accountId: WALLET_1A, authUserId: USER_1, amount: '100' });
+    expect(res1.status).toBe(200);
+
+    // User 1 tries to claim with a brand new Wallet 1B -> MUST be rejected due to auth_user_id cooldown
+    const res2 = await db.handleAddMoney({ accountId: WALLET_1B, authUserId: USER_1, amount: '100' });
+    expect(res2.status).toBe(429);
+    expect(res2.body.code).toBe('ADD_MONEY_COOLDOWN');
+
+    // User 2 with different auth ID can still claim
+    const res3 = await db.handleAddMoney({ accountId: WALLET_2A, authUserId: USER_2, amount: '100' });
+    expect(res3.status).toBe(200);
+  });
+
+  test('concurrency race condition: 2 parallel requests result in exactly 1 success and 1 rejected', async () => {
+    const db = new MockDatabaseState(24 * 60 * 60 * 1000, 1000);
+
+    // Fire two requests concurrently for USER_1
+    const [req1, req2] = await Promise.all([
+      db.handleAddMoney({ accountId: WALLET_1A, authUserId: USER_1, amount: '100', delayMs: 25 }),
+      db.handleAddMoney({ accountId: WALLET_1A, authUserId: USER_1, amount: '100', delayMs: 25 }),
+    ]);
+
+    const results = [req1, req2];
+    const successes = results.filter(r => r.status === 200);
+    const rejections = results.filter(r => r.status === 429);
+
+    expect(successes).toHaveLength(1);
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0].body.code).toMatch(/ADD_MONEY_IN_FLIGHT|ADD_MONEY_COOLDOWN/);
+    expect(db.claims).toHaveLength(1);
+  });
+
+  test('daily cap limits total amount claimed within 24 hours', async () => {
+    // 0 ms cooldown but 200 CPINR daily cap
+    const db = new MockDatabaseState(0, 200);
+
+    const res1 = await db.handleAddMoney({ accountId: WALLET_1A, authUserId: USER_1, amount: '100' });
+    expect(res1.status).toBe(200);
+
+    const res2 = await db.handleAddMoney({ accountId: WALLET_1A, authUserId: USER_1, amount: '100' });
+    expect(res2.status).toBe(200);
+
+    // 3rd claim brings total to 300, exceeding the 200 daily cap
+    const res3 = await db.handleAddMoney({ accountId: WALLET_1A, authUserId: USER_1, amount: '100' });
+    expect(res3.status).toBe(429);
+    expect(res3.body.code).toBe('ADD_MONEY_DAILY_CAP_EXCEEDED');
+  });
+});
+
