@@ -19,6 +19,7 @@ import { supabase } from '../services/supabase';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/theme';
 import { MONEY_BALANCE_LABEL, MONEY_SYMBOL, formatMoneyAmount } from '../utils/currency';
 import { PILOT_NOTICE_TEXT, PILOT_NOTICE_TITLE } from '../utils/pilot';
+import { usePaymentIntent } from '../hooks/usePaymentIntent';
 import {
   LoadingSpinner,
   TransactionItem,
@@ -164,6 +165,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
   const [addMoneyMessage, setAddMoneyMessage] = useState('');
   const [addMoneyTxHash, setAddMoneyTxHash] = useState('');
   const [addMoneyRetryAfterSeconds, setAddMoneyRetryAfterSeconds] = useState(0);
+  const {
+    idempotencyKey: addMoneyIntentKey,
+    getOrCreateIntent: getOrCreateAddMoneyIntent,
+    clearIntent: clearAddMoneyIntent,
+  } = usePaymentIntent();
   const fadeAnim = useState(new Animated.Value(0))[0];
   const slideAnim = useState(new Animated.Value(50))[0];
   const isAddMoneyBusy = ['checking', 'authenticating', 'processing'].includes(addMoneyPhase);
@@ -346,9 +352,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
       setAddMoneyRetryAfterSeconds(retryAfterSeconds);
       setAddMoneyMessage('');
       setAddMoneyPhase('cooldown');
+      clearAddMoneyIntent();
       return;
     }
 
+    getOrCreateAddMoneyIntent();
     setAddMoneyMessage(`Claim ${formatMoneyAmount(Number(ADD_MONEY_DISPLAY_AMOUNT))} for your pilot wallet. One claim is available every 24 hours.`);
     setAddMoneyPhase('confirm');
   };
@@ -359,6 +367,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
       setAddMoneyMessage('');
       setAddMoneyTxHash('');
       setAddMoneyRetryAfterSeconds(0);
+      clearAddMoneyIntent();
     }
   };
 
@@ -366,6 +375,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
     if (!walletAddress || isAddMoneyBusy) return;
 
     try {
+      const activeIntentKey = getOrCreateAddMoneyIntent();
       setAddMoneyTxHash('');
       setAddMoneyRetryAfterSeconds(0);
       setAddMoneyMessage('Confirm with PIN or biometrics to continue...');
@@ -387,6 +397,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
       if (wallet.publicKey !== walletAddress) {
         setAddMoneyMessage('This device wallet does not match the active profile. Please sign in again before claiming pilot credits.');
         setAddMoneyPhase('error');
+        clearAddMoneyIntent();
         return;
       }
 
@@ -394,7 +405,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
       setAddMoneyPhase('processing');
       await waitForUiPaint();
 
-      const txHash = await requestAddMoney(wallet);
+      const txHash = await requestAddMoney(wallet, activeIntentKey);
       setAddMoneyTxHash(txHash);
 
       await saveTransaction({
@@ -408,6 +419,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
         recipient_name: 'Your wallet',
         note: 'Pilot credits added',
       });
+
+      // Terminal state: clear intent
+      clearAddMoneyIntent();
 
       void loadTransactions();
       void loadBalance(walletAddress);
@@ -423,6 +437,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
         setAddMoneyRetryAfterSeconds(retryAfterSeconds);
         setAddMoneyMessage('');
         setAddMoneyPhase('cooldown');
+        clearAddMoneyIntent();
         return;
       }
 
