@@ -33,6 +33,70 @@ interface OTPRateLimit {
 }
 
 /**
+ * Guard against silently destroying the user's only wallet recovery path.
+ *
+ * `supabase.auth.signInWithOtp` / `verifyOtp` mint a session for the address
+ * being verified, which changes `auth.uid()`. `wallet_backups` is
+ * UNIQUE(auth_user_id) with RLS scoped to `auth.uid()`, so once the session
+ * belongs to a different auth user, `getCloudWalletBackup()` returns nothing
+ * and the encrypted seed is unreachable — silent, unrecoverable data loss.
+ *
+ * This resolves to a blocking error whenever a session already exists, that
+ * session owns a wallet backup, and the address being verified is not the one
+ * the session already belongs to. Re-verifying the *same* address is safe: the
+ * resulting session is the same auth user, so the backup stays bound.
+ *
+ * Returns null when the OTP is safe to send, or an error message to surface.
+ */
+export async function getSessionSwapBlockReason(email: string): Promise<string | null> {
+  try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const session = sessionData?.session;
+
+    // No session to displace — onboarding / login. Nothing to lose.
+    if (!session?.user) {
+      return null;
+    }
+
+    const currentEmail = session.user.email?.trim().toLowerCase();
+    const targetEmail = email.trim().toLowerCase();
+
+    // Same address: verifying it again yields the same auth user.
+    if (currentEmail && currentEmail === targetEmail) {
+      return null;
+    }
+
+    // A different address would swap auth.uid(). Only block if this auth user
+    // actually has a backup bound to it — otherwise there is nothing to lose.
+    const { data: backup, error } = await supabase
+      .from('wallet_backups')
+      .select('id')
+      .eq('auth_user_id', session.user.id)
+      .maybeSingle();
+
+    if (error) {
+      // Fail closed: we could not prove the backup is safe, so do not risk it.
+      console.error('Wallet backup guard lookup failed:', error);
+      return 'Could not confirm your wallet backup is safe, so this verification was stopped. Check your connection and try again.';
+    }
+
+    if (!backup) {
+      return null;
+    }
+
+    return (
+      `Verifying ${email} would sign you in as a different account and disconnect ` +
+      `the encrypted wallet backup saved under ${currentEmail || 'your current email'}. ` +
+      `That backup is the only way to recover this wallet. ` +
+      `Sign out and restore your wallet first if you really want to use a different email.`
+    );
+  } catch (error: any) {
+    console.error('Wallet backup guard error:', error);
+    return 'Could not confirm your wallet backup is safe, so this verification was stopped. Please try again.';
+  }
+}
+
+/**
  * Check if user has exceeded OTP rate limit
  */
 async function checkRateLimit(): Promise<{
@@ -124,6 +188,12 @@ export async function sendLoginEmailOTP(email: string): Promise<{
   resetTime?: Date;
 }> {
   try {
+    // Never swap the auth session out from under a bound wallet backup.
+    const blockReason = await getSessionSwapBlockReason(email);
+    if (blockReason) {
+      return { success: false, error: blockReason };
+    }
+
     const rateLimitCheck = await checkRateLimit();
 
     if (!rateLimitCheck.allowed) {
@@ -180,6 +250,13 @@ export async function verifyLoginEmailOTP(
   error?: string;
 }> {
   try {
+    // verifyOtp is what actually mints the new session, so the guard is
+    // enforced here too — not only on the send path.
+    const blockReason = await getSessionSwapBlockReason(verificationId);
+    if (blockReason) {
+      return { success: false, error: blockReason };
+    }
+
     const { data, error } = await supabase.auth.verifyOtp({
       email: verificationId,
       token: otpCode,
@@ -236,82 +313,19 @@ export async function signOut(): Promise<void> {
   clearSessionPin();
 }
 
-/**
- * Send OTP to email address (for merchant registration)
- */
-export async function sendEmailOTP(email: string): Promise<{
-  success: boolean;
-  verificationId?: string;
-  error?: string;
-}> {
-  try {
-    // Production: Send email OTP via Supabase
-    // Note: This requires setting up email templates in Supabase dashboard
-    const { error } = await supabase.auth.signInWithOtp({
-      email: email,
-      options: {
-        shouldCreateUser: true,
-      }
-    });
-
-    if (error) {
-      return {
-        success: false,
-        error: error.message,
-      };
-    }
-
-    return {
-      success: true,
-      verificationId: email,
-    };
-  } catch (error: any) {
-    console.error('Send email OTP error:', error);
-    return {
-      success: false,
-      error: error.message || 'Failed to send email OTP',
-    };
-  }
-}
-
-/**
- * Verify email OTP (for merchant registration)
- */
-export async function verifyEmailOTP(
-  verificationId: string,
-  otpCode: string
-): Promise<{
-  success: boolean;
-  email?: string;
-  error?: string;
-}> {
-  try {
-    // Production: Verify with Supabase
-    const { data, error } = await supabase.auth.verifyOtp({
-      email: verificationId,
-      token: otpCode,
-      type: 'email',
-    });
-
-    if (error) {
-      return {
-        success: false,
-        error: error.message,
-      };
-    }
-
-    return {
-      success: true,
-      email: data.user?.email || verificationId,
-    };
-  } catch (error: any) {
-    console.error('Verify email OTP error:', error);
-    return {
-      success: false,
-      error: error.message || 'Invalid email OTP code',
-    };
-  }
-}
+// REMOVED (issue #32): sendEmailOTP / verifyEmailOTP.
+//
+// These were the merchant-registration second-email pair. They called
+// supabase.auth.signInWithOtp({ shouldCreateUser: true }) followed by
+// verifyOtp on the *business* email while the wallet owner was already
+// signed in. That replaced the session and changed auth.uid(), orphaning the
+// user's wallet_backups row (UNIQUE(auth_user_id), RLS scoped to auth.uid())
+// and silently destroying their only wallet recovery path.
+//
+// Do not reintroduce a second-email flow that mints a session. Verify a
+// business contact address with sendMerchantContactOtp /
+// verifyMerchantContactOtp below, which go through the relayer's Admin API
+// and never touch the wallet owner's session.
 
 /**
  * Send a merchant contact email OTP via the relayer's Admin API path.
