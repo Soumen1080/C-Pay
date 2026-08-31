@@ -499,33 +499,27 @@ USING (
   )
 );
 
+-- The transactions table is the payments ledger. It must never be writable by
+-- the accounts it describes: a participant who can INSERT can forge a receipt
+-- ("I received ₹50,000, status success") and, because refresh_merchant_totals()
+-- sums this same table, forge merchant revenue as well. Writes are service_role
+-- only (relayer / Horizon ingest worker); clients get SELECT only.
 DROP POLICY IF EXISTS "transactions_insert" ON transactions;
 DROP POLICY IF EXISTS "transactions_insert_participant" ON transactions;
-CREATE POLICY "transactions_insert_participant" ON transactions
-FOR INSERT
-WITH CHECK (
-  auth.uid() IS NOT NULL AND (
-    from_address = current_wallet_address()
-    OR to_address = current_wallet_address()
-  )
-);
-
 DROP POLICY IF EXISTS "transactions_update" ON transactions;
 DROP POLICY IF EXISTS "transactions_update_participant" ON transactions;
-CREATE POLICY "transactions_update_participant" ON transactions
-FOR UPDATE
-USING (
-  auth.uid() IS NOT NULL AND (
-    from_address = current_wallet_address()
-    OR to_address = current_wallet_address()
-  )
-)
-WITH CHECK (
-  auth.uid() IS NOT NULL AND (
-    from_address = current_wallet_address()
-    OR to_address = current_wallet_address()
-  )
-);
+DROP POLICY IF EXISTS "transactions_delete_participant" ON transactions;
+DROP POLICY IF EXISTS "transactions_all_participant" ON transactions;
+
+DROP POLICY IF EXISTS "transactions_service_all" ON transactions;
+CREATE POLICY "transactions_service_all" ON transactions
+FOR ALL
+USING (auth.jwt() ->> 'role' = 'service_role')
+WITH CHECK (auth.jwt() ->> 'role' = 'service_role');
+
+REVOKE INSERT, UPDATE, DELETE ON transactions FROM anon, authenticated;
+GRANT SELECT ON transactions TO authenticated;
+GRANT ALL ON transactions TO service_role;
 
 DROP POLICY IF EXISTS "merchant_qr_codes_select" ON merchant_qr_codes;
 DROP POLICY IF EXISTS "merchant_qr_codes_select_own" ON merchant_qr_codes;
