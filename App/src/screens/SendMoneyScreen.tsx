@@ -28,6 +28,7 @@ import { AlertManager } from '../utils/alert';
 import { MONEY_SYMBOL, MONEY_UNIT_LABEL, formatMoneyAmount } from '../utils/currency';
 import { PILOT_TESTNET_TEXT } from '../utils/pilot';
 import { getPaymentFailureCopy } from '../utils/paymentFailure';
+import { usePaymentIntent } from '../hooks/usePaymentIntent';
 
 interface SendMoneyScreenProps {
   navigation: any;
@@ -54,6 +55,14 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
   const paymentInProgress = useRef<boolean>(false);
   const networkTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const recipientLookupSeq = useRef<number>(0);
+
+  const {
+    idempotencyKey,
+    createIntent,
+    getOrCreateIntent,
+    clearIntent,
+    resetIntent,
+  } = usePaymentIntent(route?.params?.idempotencyKey || null);
 
   useEffect(() => {
     loadWalletData();
@@ -88,6 +97,9 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
     }
     if (route?.params?.isFromQR) {
       setIsFromQR(true);
+    }
+    if (route?.params?.idempotencyKey) {
+      createIntent(route.params.idempotencyKey);
     }
   }, [route?.params]);
 
@@ -278,6 +290,7 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
   const handleSendMoney = () => {
     if (submitting || paymentInProgress.current) return;
     if (!validateInputs()) return;
+    getOrCreateIntent();
     setShowReview(true);
   };
 
@@ -289,6 +302,7 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
     const effectiveRecipientName = recipientName;
     const effectiveRecipientCPayId = recipientCPayId;
     const displayId = effectiveRecipientCPayId || formatWalletFingerprint(recipientAddress);
+    const activeIntentKey = getOrCreateIntent();
 
     const timestamp = () =>
       new Date().toLocaleString('en-US', {
@@ -347,12 +361,16 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
         amount,
         {
           note,
+          idempotencyKey: activeIntentKey,
         }
       );
 
       // Clear timeout on success
       if (networkTimeoutRef.current) clearTimeout(networkTimeoutRef.current);
       paymentInProgress.current = false;
+
+      // Terminal state: clear payment intent
+      clearIntent();
 
       // Calculate processing time
       const processingTime = Math.round((Date.now() - startTime) / 1000);
@@ -397,6 +415,10 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
       setSubmitting(false);
 
       const copy = getPaymentFailureCopy(error);
+      const isTerminalFailure = copy.category === 'support';
+      if (isTerminalFailure) {
+        clearIntent();
+      }
 
       // Navigate to Failure screen
       navigation.replace('PaymentFailure', {
@@ -408,6 +430,8 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
         errorCode: copy.errorCode,
         category: copy.category,
         timestamp: timestamp(),
+        note: note || undefined,
+        idempotencyKey: isTerminalFailure ? undefined : activeIntentKey,
       });
     }
   };

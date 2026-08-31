@@ -26,6 +26,8 @@ interface PaymentFailureScreenProps {
       errorCode?: string;
       category?: 'retryable' | 'support';
       timestamp?: string;
+      note?: string;
+      idempotencyKey?: string;
     };
   };
 }
@@ -43,6 +45,8 @@ export const PaymentFailureScreen: React.FC<PaymentFailureScreenProps> = ({
     errorCode,
     category = 'retryable',
     timestamp,
+    note,
+    idempotencyKey,
   } = route.params;
 
   const needsSupport = category === 'support';
@@ -106,7 +110,13 @@ export const PaymentFailureScreen: React.FC<PaymentFailureScreenProps> = ({
   }, []);
 
   const handleTryAgain = () => {
-    navigation.goBack();
+    navigation.replace('SendMoney', {
+      recipientAddress,
+      amount,
+      recipientName,
+      note,
+      idempotencyKey,
+    });
   };
 
   const handleGoHome = () => {

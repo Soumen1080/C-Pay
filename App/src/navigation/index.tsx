@@ -59,10 +59,11 @@ type RootStackParamList = {
     note?: string;
     hideBalance?: boolean;
     isFromQR?: boolean;
+    idempotencyKey?: string;
   };
   PaymentProcessing: { amount: string; recipientName: string; recipientAddress: string };
   PaymentSuccess: { transactionHash: string; fromAddress: string; amount: string; recipientName: string; recipientAddress: string; processingTime?: number; timestamp?: string; note?: string };
-  PaymentFailure: { amount: string; recipientName: string; recipientAddress: string; errorMessage?: string; errorReason?: string; errorCode?: string; category?: 'retryable' | 'support'; timestamp?: string };
+  PaymentFailure: { amount: string; recipientName: string; recipientAddress: string; errorMessage?: string; errorReason?: string; errorCode?: string; category?: 'retryable' | 'support'; timestamp?: string; note?: string; idempotencyKey?: string };
   QRGenerator: undefined;
   TransactionHistory: { highlightTransaction?: string };
   SecurityCenter: undefined;

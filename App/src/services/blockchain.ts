@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import * as StellarSdk from '@stellar/stellar-base';
 import { StellarWallet } from './wallet';
 import { supabase } from './supabase';
+import { generateIdempotencyKey } from '../hooks/usePaymentIntent';
 
 const getEnvVar = (key: string, fallback: string = ''): string => {
   const processEnv = process.env[key];
@@ -64,6 +65,7 @@ export type TransactionStatus = 'pending' | 'success' | 'failed' | 'unknown';
 
 export type PaymentOptions = {
   note?: string;
+  idempotencyKey?: string;
 };
 
 type HorizonBalance = {
@@ -234,14 +236,19 @@ export function formatTimeRemaining(seconds: number): string {
   return `${remainingSeconds}s`;
 }
 
-export async function requestAddMoney(wallet: StellarWallet): Promise<string> {
+export async function requestAddMoney(
+  wallet: StellarWallet,
+  idempotencyKey?: string
+): Promise<string> {
   await ensureAccountReady(wallet);
+
+  const key = idempotencyKey || generateIdempotencyKey();
 
   const result = await relayerRequest<{ hash: string }>('/add-money', {
     method: 'POST',
     body: JSON.stringify({
       accountId: wallet.publicKey,
-      idempotencyKey: `add-money-${wallet.publicKey}-${Date.now()}`,
+      idempotencyKey: key,
     }),
   });
 
@@ -286,11 +293,13 @@ export async function sendPayment(
 
   transaction.sign(wallet.keypair);
 
+  const idempotencyKey = options.idempotencyKey || generateIdempotencyKey();
+
   const result = await relayerRequest<{ hash: string }>('/payments/submit', {
     method: 'POST',
     body: JSON.stringify({
       signedXdr: transaction.toXDR(),
-      idempotencyKey: `payment-${wallet.publicKey}-${destination}-${normalizedAmount}-${Date.now()}`,
+      idempotencyKey,
     }),
   }, CONTRACT_INTENT_TIMEOUT_MS);
 
