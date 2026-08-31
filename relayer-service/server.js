@@ -155,20 +155,45 @@ app.get('/account/:accountId/balance', requireAuthenticatedUser, requirePathWall
 app.post('/accounts/prepare', requireAuthenticatedUser, async (req, res) => {
   const accountId = assertAccountId(req.body.accountId, 'accountId');
 
-  if (config.authRequired && req.auth && req.auth.sub && isSupabasePersistenceEnabled()) {
-    try {
-      await supabaseRestRequest('wallet_bindings', {
-        method: 'POST',
-        headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-        body: JSON.stringify({
-          auth_user_id: req.auth.sub,
-          wallet_address: accountId,
-        }),
+  if (config.authRequired) {
+    const authUid = req.auth && req.auth.sub;
+    if (!authUid) {
+      return res.status(401).json({
+        error: 'Authentication required',
+        code: 'AUTH_REQUIRED',
       });
-    } catch (err) {
-      console.error('Failed to bind wallet:', err.message);
+    }
+
+    if (isSupabasePersistenceEnabled()) {
+      const existingOwner = await resolveWalletOwner(accountId);
+      if (existingOwner && existingOwner !== authUid) {
+        return res.status(403).json({
+          error: 'You are not authorized to prepare this wallet (already bound to another user)',
+          code: 'WALLET_OWNERSHIP_DENIED',
+        });
+      }
+
+      if (!existingOwner) {
+        const ownedWallets = await resolveUserWallets(authUid);
+        if (ownedWallets && ownedWallets.length >= config.maxSponsoredAccountsPerUser) {
+          return res.status(403).json({
+            error: `Maximum sponsored accounts limit (${config.maxSponsoredAccountsPerUser}) reached for this user`,
+            code: 'SPONSORSHIP_LIMIT_EXCEEDED',
+            maxAccounts: config.maxSponsoredAccountsPerUser,
+          });
+        }
+
+        try {
+          await bindWalletToUser(authUid, accountId);
+        } catch (err) {
+          console.error('Failed to bind wallet:', err.message);
+        }
+      }
     }
   }
+
+  // Check sponsor balance alarm
+  checkSponsorBalanceAlarm().catch(() => {});
 
   const status = await getAccountStatus(accountId);
 
@@ -493,6 +518,7 @@ function loadConfig() {
     transactionTimeoutSeconds: Number(process.env.TRANSACTION_TIMEOUT_SECONDS || 60),
     startingBalance: process.env.STARTING_BALANCE || '1.5',
     trustlineLimit: process.env.TRUSTLINE_LIMIT || '1000000000',
+    maxSponsoredAccountsPerUser: Number(process.env.MAX_SPONSORED_ACCOUNTS_PER_USER || 5),
     addMoneyAmount: process.env.ADD_MONEY_AMOUNT || '100',
     maxAddMoneyAmount: Number(process.env.MAX_ADD_MONEY_AMOUNT || 1000),
     maxPaymentAmount: Number(process.env.MAX_PAYMENT_AMOUNT || 100000),
@@ -632,6 +658,73 @@ async function resolveUserWallets(authUid) {
   } catch (error) {
     console.warn('Wallet ownership lookup failed:', error.message);
     return null;
+  }
+}
+
+/**
+ * Resolve the auth user ID that owns a given wallet address.
+ * Returns null if unbound or persistence is not configured.
+ */
+async function resolveWalletOwner(walletAddress) {
+  if (!isSupabasePersistenceEnabled()) {
+    return null;
+  }
+
+  try {
+    const query = new URLSearchParams({
+      select: 'auth_user_id',
+      wallet_address: `eq.${walletAddress}`,
+      is_active: 'eq.true',
+      limit: '1',
+    });
+    const rows = await supabaseRestRequest(`wallet_bindings?${query.toString()}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (Array.isArray(rows) && rows.length > 0 && rows[0]?.auth_user_id) {
+      return rows[0].auth_user_id;
+    }
+    return null;
+  } catch (error) {
+    console.warn('Wallet owner lookup failed:', error.message);
+    return null;
+  }
+}
+
+/**
+ * Bind a wallet address to an auth user in the database.
+ */
+async function bindWalletToUser(authUserId, walletAddress) {
+  if (!isSupabasePersistenceEnabled()) {
+    return;
+  }
+
+  await supabaseRestRequest('wallet_bindings', {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({
+      auth_user_id: authUserId,
+      wallet_address: walletAddress,
+      is_active: true,
+    }),
+  });
+}
+
+/**
+ * Check sponsor account XLM balance and trigger alarm if below threshold.
+ */
+async function checkSponsorBalanceAlarm() {
+  try {
+    const balances = await getBalances(sponsorKeypair.publicKey());
+    const sponsorXlm = Number(balances.xlm || '0');
+    if (sponsorXlm < config.lowXlmThreshold) {
+      console.warn(`[SPONSOR_DRAIN_ALARM] Sponsor account XLM balance is low: ${sponsorXlm} XLM (threshold: ${config.lowXlmThreshold})`);
+      if (typeof sendLowBalanceAlert === 'function') {
+        sendLowBalanceAlert({ sponsorXlm, distributionAsset: null, lowXlm: true, lowAsset: false }).catch(() => {});
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to check sponsor balance alarm:', err.message);
   }
 }
 
