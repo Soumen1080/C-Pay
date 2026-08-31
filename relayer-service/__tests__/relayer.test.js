@@ -545,3 +545,76 @@ describe('Stellar key validation', () => {
     expect(StellarSdk.StrKey.isValidEd25519SecretSeed('not-a-secret')).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 12. Key Custody & Dynamic Zero-Downtime Rotation (#58)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const { KeyManager } = require('../keyManager');
+
+describe('Key Custody & Dynamic Key Rotation (#58)', () => {
+  const kp1 = StellarSdk.Keypair.random();
+  const kp2 = StellarSdk.Keypair.random();
+  const distKp = StellarSdk.Keypair.random();
+
+  test('initializes with least-privilege role separation', () => {
+    const km = new KeyManager({
+      sponsorSecret: kp1.secret(),
+      distributionSecret: distKp.secret(),
+    });
+
+    const sponsorSigner = km.getSigner('sponsor');
+    const distSigner = km.getSigner('distribution');
+
+    expect(sponsorSigner.publicKey()).toBe(kp1.publicKey());
+    expect(distSigner.publicKey()).toBe(distKp.publicKey());
+    expect(sponsorSigner.publicKey()).not.toBe(distSigner.publicKey());
+  });
+
+  test('dynamically rotates signer key without downtime', () => {
+    const km = new KeyManager({
+      sponsorSecret: kp1.secret(),
+    });
+
+    expect(km.getSigner('sponsor').publicKey()).toBe(kp1.publicKey());
+
+    // Rotate sponsor key from kp1 to kp2
+    const rotatedSigner = km.rotateKey('sponsor', kp2.secret());
+
+    expect(rotatedSigner.publicKey()).toBe(kp2.publicKey());
+    expect(km.getSigner('sponsor').publicKey()).toBe(kp2.publicKey());
+
+    const status = km.getStatus();
+    expect(status.signers.sponsor.publicKey).toBe(kp2.publicKey());
+  });
+
+  test('KMS provider mode creates KMS-backed signer abstraction', () => {
+    const originalProvider = process.env.SIGNER_PROVIDER;
+    process.env.SIGNER_PROVIDER = 'kms';
+    process.env.SPONSOR_PUBLIC_KEY = kp1.publicKey();
+
+    const km = new KeyManager({
+      sponsorSecret: 'kms://arn:aws:kms:us-east-1:123456789012:key/sponsor-key',
+    });
+
+    const signer = km.getSigner('sponsor');
+    expect(signer.type).toBe('kms');
+    expect(signer.publicKey()).toBe(kp1.publicKey());
+
+    process.env.SIGNER_PROVIDER = originalProvider || 'env';
+  });
+
+  test('records signing activity and tracks logs', () => {
+    const km = new KeyManager({
+      sponsorSecret: kp1.secret(),
+    });
+
+    const signer = km.getSigner('sponsor');
+    const dummyHash = Buffer.alloc(32);
+    signer.signHash(dummyHash);
+
+    const status = km.getStatus();
+    expect(status.totalActivityLogs).toBeGreaterThan(0);
+  });
+});
+
