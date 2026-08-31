@@ -5,19 +5,43 @@
  *
  * ─── Security design notes ───────────────────────────────────────────────────
  *
- * PIN verifier KDF  (PIN_KDF_ITERATIONS = 20 000)
- *   PBKDF2-SHA256 over the salted PIN, used only to verify the PIN at login.
- *   The iteration count is lower than the wallet KDF because it runs every
- *   login attempt (including during backoff checks).  All attempts after the
- *   first few are rate-limited by the lockout policy, so the effective work
- *   factor for an attacker is the lockout delay × iterations, not iterations
- *   alone.  Legacy verifiers used 120 000 iterations and are migrated
- *   transparently on successful login.
+ * Threat model for the PIN  (issue #36)
+ *   A 6-digit PIN is a 10^6 keyspace — small enough that, once an attacker has
+ *   the SecureStore blob off the device, only the KDF cost stands between them
+ *   and the seed.  The lockout policy below is worthless in that scenario: it
+ *   is enforced by this app, and an offline attacker is not running this app.
+ *   So the PIN is treated as a *convenience factor* guarding an on-device
+ *   secret, and defence is layered:
+ *     1. Lockout + wipe raise the cost of on-device guessing.
+ *     2. KDF cost raises the cost of offline guessing once extracted.
+ *     3. SecureStore keeps the blob in the platform keystore to begin with.
+ *   Even so, 10^6 × PBKDF2 remains tractable for a motivated attacker with
+ *   GPUs.  A memory-hard KDF (Argon2id) is the real fix — see the note on
+ *   WALLET_KDF_ITERATIONS below.
  *
- * Wallet encryption KDF  (WALLET_KDF_ITERATIONS = 80 000)
- *   PBKDF2-SHA256 over the salted PIN, used to derive the AES-equivalent
- *   key for wallet encryption.  Higher than the verifier because it is only
- *   called on successful unlock — the extra cost is paid once per session.
+ * PIN verifier KDF  (PIN_KDF_ITERATIONS = 210 000)
+ *   PBKDF2-SHA256 over the salted PIN, used only to verify the PIN at login.
+ *   Set to the OWASP 2023 floor for PBKDF2-SHA256.  This runs once per login
+ *   attempt; at ~200 ms on target hardware that is acceptable interactively
+ *   and multiplies an offline attacker's cost over the whole 10^6 keyspace.
+ *   Verifiers written at the old 20 000 (and the older legacy 120 000) are
+ *   migrated transparently on the next successful login — never by forcing a
+ *   re-entry, which could strand a user who has no cloud backup.
+ *
+ * Wallet encryption KDF  (WALLET_KDF_ITERATIONS = 600 000)
+ *   PBKDF2-SHA256 over the salted PIN, used to derive the key for wallet
+ *   encryption.  Higher than the verifier because it is only called on a
+ *   successful unlock — the cost is paid once per session, not per attempt.
+ *   Existing wallets are re-wrapped at the new cost on the next successful
+ *   unlock (see maybeRewrapWalletSecret), so no user is ever asked to
+ *   re-enter or re-import anything.
+ *
+ *   NOTE: PBKDF2 is not memory-hard, so GPU parallelism still favours the
+ *   attacker.  Argon2id is the intended replacement; it is not adopted here
+ *   because the pinned @noble/hashes is 1.3.2, which predates Argon2 support
+ *   (added in 1.4).  The versioned re-wrap path below is what makes that swap
+ *   a contained change: bump WALLET_KDF_VERSION and implement deriveWalletKey
+ *   for the new version, and existing wallets migrate themselves on unlock.
  *
  * Wallet cipher  (XChaCha20-Poly1305)
  *   Chosen over AES-GCM for its larger 192-bit nonce (eliminates nonce-reuse
@@ -37,6 +61,19 @@
  *   lockout-until timestamp are written to SecureStore so they survive
  *   app restarts and cannot be reset by simply force-quitting the app.
  *   A successful PIN clears the counter.
+ *
+ * Local wipe policy  (WIPE_PIN_ATTEMPTS = 15)
+ *   After 15 consecutive wrong PINs the encrypted wallet is erased from this
+ *   device.  This bounds on-device guessing at 15 tries out of 10^6 rather
+ *   than letting an attacker sit through the backoff indefinitely.
+ *
+ *   The wipe destroys ONLY local device state.  It does not touch the Stellar
+ *   account or the encrypted cloud backup, so a user with a cloud backup and
+ *   their recovery password loses nothing but the need to restore.  A user
+ *   WITHOUT a cloud backup loses the wallet permanently — there is no other
+ *   copy of the seed.  Because of that asymmetry the UI must warn before the
+ *   threshold is reached, not at it: attemptsUntilWipe() drives a countdown
+ *   from WIPE_WARNING_THRESHOLD onward, and LoginScreen surfaces it.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  */
@@ -68,10 +105,21 @@ const WALLET_STORAGE_VERSION = 4;
 const PIN_VERIFIER_VERSION = 2;
 /** Legacy PBKDF2 iterations used before v2 verifiers. Migrated on next login. */
 const LEGACY_PIN_KDF_ITERATIONS = 120_000;
-/** PBKDF2-SHA256 iterations for the PIN *verifier* (login check). */
-const PIN_KDF_ITERATIONS = 20_000;
-/** PBKDF2-SHA256 iterations for *wallet* key derivation (paid once per session). */
-const WALLET_KDF_ITERATIONS = 80_000;
+/**
+ * PBKDF2-SHA256 iterations for the PIN *verifier* (login check).
+ * OWASP 2023 floor for PBKDF2-SHA256. Raised from 20 000 (issue #36).
+ */
+export const PIN_KDF_ITERATIONS = 210_000;
+/**
+ * PBKDF2-SHA256 iterations for *wallet* key derivation (paid once per session).
+ * Raised from 80 000 (issue #36).
+ */
+export const WALLET_KDF_ITERATIONS = 600_000;
+/**
+ * Identifies the wallet key-derivation scheme. Bump when the KDF itself
+ * changes (e.g. to Argon2id) so stored wallets can be re-wrapped on unlock.
+ */
+const WALLET_KDF_VERSION = 1;
 
 // ─── Session TTL ──────────────────────────────────────────────────────────────
 /** Wallet and PIN stay in memory for this many milliseconds after last use. */
@@ -87,6 +135,18 @@ export const LOCKOUT_BASE_MS = 30_000; // 30 seconds
 /** Hard ceiling for any single lockout period. */
 export const MAX_LOCKOUT_MS = 60 * 60 * 1000; // 1 hour
 
+// ─── Local wipe policy ────────────────────────────────────────────────────────
+/**
+ * Consecutive wrong PINs after which the local wallet is erased.
+ * See the "Local wipe policy" note at the top of this file.
+ */
+export const WIPE_PIN_ATTEMPTS = 15;
+/**
+ * Start warning the user about the impending wipe from this attempt onward,
+ * so the wipe is never a surprise.
+ */
+export const WIPE_WARNING_THRESHOLD = 10;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type StoredWalletPayload = {
@@ -95,6 +155,11 @@ type StoredWalletPayload = {
   cipher: 'xchacha20-poly1305';
   kdf: 'pbkdf2-sha256';
   kdfIterations: number;
+  /**
+   * Key-derivation scheme version (issue #36). Absent on wallets written
+   * before the re-wrap migration existed; treated as 1.
+   */
+  kdfVersion?: number;
   salt: string;
   nonce: string;
   ciphertext: string;
@@ -244,6 +309,42 @@ export function isLockedOut(state: PinAttemptState): boolean {
 export function lockoutRemainingMs(state: PinAttemptState): number {
   if (!isLockedOut(state)) return 0;
   return state.lockedUntil - Date.now();
+}
+
+/**
+ * Wrong attempts left before the local wallet is wiped.
+ * Clamped at 0; never negative.
+ */
+export function attemptsUntilWipe(state: PinAttemptState): number {
+  return Math.max(0, WIPE_PIN_ATTEMPTS - state.attempts);
+}
+
+/**
+ * True once the user should be warned that continued wrong PINs will erase
+ * the wallet from this device.
+ */
+export function shouldWarnAboutWipe(state: PinAttemptState): boolean {
+  return state.attempts >= WIPE_WARNING_THRESHOLD && state.attempts < WIPE_PIN_ATTEMPTS;
+}
+
+/**
+ * True when the wipe threshold has been reached and the local wallet must go.
+ */
+export function shouldWipeWallet(state: PinAttemptState): boolean {
+  return state.attempts >= WIPE_PIN_ATTEMPTS;
+}
+
+/**
+ * Erase the local wallet after too many failed PIN attempts.
+ *
+ * This removes local device state only — the Stellar account and any encrypted
+ * cloud backup are untouched. Callers MUST have warned the user beforehand
+ * (see shouldWarnAboutWipe) because a user without a cloud backup loses the
+ * wallet permanently.
+ */
+export async function wipeWalletAfterFailedAttempts(): Promise<void> {
+  clearSessionPin();
+  await clearWallet();
 }
 
 // ─── Core wallet API ──────────────────────────────────────────────────────────
@@ -492,6 +593,7 @@ async function storeSecretWithSalt(secret: string, pin: string, salt: Uint8Array
     cipher: 'xchacha20-poly1305',
     kdf: 'pbkdf2-sha256',
     kdfIterations: WALLET_KDF_ITERATIONS,
+    kdfVersion: WALLET_KDF_VERSION,
     salt: bytesToHex(salt),
     nonce: bytesToHex(nonce),
     ciphertext: bytesToHex(ciphertext),
@@ -499,6 +601,31 @@ async function storeSecretWithSalt(secret: string, pin: string, salt: Uint8Array
   };
 
   await SecureStore.setItemAsync(keyName, JSON.stringify(payload));
+}
+
+/**
+ * Re-wrap a decrypted wallet at the current KDF cost if it was stored at a
+ * weaker one (issue #36).
+ *
+ * Runs only after a successful unlock, so the user is never asked to re-enter
+ * or re-import anything — the migration is invisible. A fresh salt and nonce
+ * are generated, so this is a full re-encryption rather than a rewrite of the
+ * same ciphertext.
+ *
+ * Returns true if a re-wrap was performed.
+ */
+async function maybeRewrapWalletSecret(
+  secret: string,
+  pin: string,
+  payload: Partial<StoredWalletPayload>,
+  keyName: string,
+): Promise<boolean> {
+  const atCurrentCost = payload.kdfIterations === WALLET_KDF_ITERATIONS;
+  const atCurrentVersion = (payload.kdfVersion ?? 1) === WALLET_KDF_VERSION;
+  if (atCurrentCost && atCurrentVersion) return false;
+
+  await storeSecretWithSalt(secret, pin, await Crypto.getRandomBytesAsync(16), keyName);
+  return true;
 }
 
 async function readSecret(pin: string): Promise<string | null> {
@@ -528,7 +655,16 @@ async function readSecretAt(pin: string, keyName: string): Promise<string | null
     const plaintext = cipher.decrypt(hexToBytes(payload.ciphertext));
     const secret = bytesToUtf8(plaintext);
 
-    if (StellarSdk.StrKey.isValidEd25519SecretSeed(secret)) return secret;
+    if (StellarSdk.StrKey.isValidEd25519SecretSeed(secret)) {
+      // Issue #36 migration: a wallet wrapped at an older/weaker KDF cost is
+      // re-wrapped at the current one now that we hold the plaintext and a
+      // verified PIN. Best-effort and non-blocking — a failure here must never
+      // prevent an otherwise valid unlock, since the existing blob still works.
+      void maybeRewrapWalletSecret(secret, pin, payload, keyName).catch((error) => {
+        console.warn('Wallet KDF re-wrap failed; keeping existing blob:', error);
+      });
+      return secret;
+    }
   } catch (error) {
     console.error('Wallet decrypt failed:', error);
     return null;
