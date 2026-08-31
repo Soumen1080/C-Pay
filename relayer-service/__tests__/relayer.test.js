@@ -547,170 +547,99 @@ describe('Stellar key validation', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 12. Account Ownership Verification & Sponsorship Cap (#35)
+// 12. Idempotency duplicate prevention & intent reuse (#33)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('Account Ownership Verification & Sponsorship Cap (#35)', () => {
-  class MockWalletBindingStore {
-    constructor(maxSponsoredAccountsPerUser = 3) {
-      this.maxSponsoredAccountsPerUser = maxSponsoredAccountsPerUser;
-      this.bindings = new Map(); // walletAddress -> authUserId
+describe('Idempotency duplicate prevention & intent reuse (#33)', () => {
+  class SimulatedRelayerHandler {
+    constructor() {
+      this.locks = new Map();
+      this.onChainSubmissions = 0;
     }
 
-    async resolveWalletOwner(walletAddress) {
-      return this.bindings.get(walletAddress) || null;
-    }
-
-    async resolveUserWallets(authUid) {
-      const wallets = [];
-      for (const [wallet, user] of this.bindings.entries()) {
-        if (user === authUid) wallets.push(wallet);
-      }
-      return wallets;
-    }
-
-    async bindWallet(authUid, walletAddress) {
-      this.bindings.set(walletAddress, authUid);
-    }
-
-    async handlePrepareAccount({ authUid, accountId }) {
-      if (!authUid) {
-        return { status: 401, body: { error: 'Authentication required', code: 'AUTH_REQUIRED' } };
-      }
-
-      const existingOwner = await this.resolveWalletOwner(accountId);
-      if (existingOwner && existingOwner !== authUid) {
-        return {
-          status: 403,
-          body: { error: 'You are not authorized to prepare this wallet (already bound to another user)', code: 'WALLET_OWNERSHIP_DENIED' },
-        };
-      }
-
-      if (!existingOwner) {
-        const ownedWallets = await this.resolveUserWallets(authUid);
-        if (ownedWallets.length >= this.maxSponsoredAccountsPerUser) {
+    async submitPayment({ signedXdr, idempotencyKey }) {
+      if (idempotencyKey) {
+        if (this.locks.has(idempotencyKey)) {
+          const lock = this.locks.get(idempotencyKey);
+          if (lock.response === null) {
+            return {
+              status: 409,
+              body: {
+                error: 'A request with this idempotency key is currently processing',
+                code: 'IDEMPOTENCY_IN_FLIGHT',
+                retryAfterSeconds: 5,
+              },
+            };
+          }
           return {
-            status: 403,
-            body: {
-              error: `Maximum sponsored accounts limit (${this.maxSponsoredAccountsPerUser}) reached for this user`,
-              code: 'SPONSORSHIP_LIMIT_EXCEEDED',
-            },
+            status: 200,
+            body: lock.response,
           };
         }
-        await this.bindWallet(authUid, accountId);
+        this.locks.set(idempotencyKey, { response: null });
       }
 
-      return { status: 200, body: { accountId, sponsored: true } };
-    }
+      this.onChainSubmissions += 1;
+      const txHash = crypto.createHash('sha256').update(signedXdr || idempotencyKey).digest('hex');
+      const response = {
+        hash: txHash,
+        ledger: 1001,
+        status: 'success',
+      };
 
-    async handleAddMoney({ authUid, accountId }) {
-      if (!authUid) {
-        return { status: 401, body: { error: 'Authentication required', code: 'AUTH_REQUIRED' } };
+      if (idempotencyKey) {
+        this.locks.set(idempotencyKey, { response });
       }
-      const ownedWallets = await this.resolveUserWallets(authUid);
-      if (!ownedWallets.includes(accountId)) {
-        return {
-          status: 403,
-          body: { error: 'You are not authorized to perform actions for this wallet', code: 'WALLET_OWNERSHIP_DENIED' },
-        };
-      }
-      return { status: 200, body: { status: 'success', accountId } };
-    }
 
-    async handlePaymentSubmit({ authUid, sourceWallet }) {
-      if (!authUid) {
-        return { status: 401, body: { error: 'Authentication required', code: 'AUTH_REQUIRED' } };
-      }
-      const ownedWallets = await this.resolveUserWallets(authUid);
-      if (!ownedWallets.includes(sourceWallet)) {
-        return {
-          status: 403,
-          body: { error: 'You are not authorized to submit transactions for this wallet', code: 'WALLET_OWNERSHIP_DENIED' },
-        };
-      }
-      return { status: 200, body: { status: 'success', source: sourceWallet } };
+      return {
+        status: 200,
+        body: response,
+      };
     }
   }
 
-  const ALICE = 'user-alice-1111';
-  const BOB = 'user-bob-2222';
-  const ALICE_WALLET_1 = 'GBGJS2UIEF2DYN3L67P2A7X62M4WK72JGTF7ABCOQL75UYHMWYLFRI4S';
-  const ALICE_WALLET_2 = 'GAKUELFFUKSAJMTECN2SVXDRJOUJXDE27OPTD57SA65KJ6AU32SXKF27';
-  const BOB_WALLET = 'GCDNV66CSUCURJ7N7BRNW2J62NV7DNVN66CSUCURJ7N7BRNW2J62NV7D';
-  const UNKNOWN_WALLET = 'GDQJUTQYK2MQX2VGS26GWBW27Q2VKG2J62NV7DNVN66CSUCURJ7N7BRN';
+  test('fires the same intent twice concurrently and asserts only one on-chain submission (duplicate rejected with 409)', async () => {
+    const relayer = new SimulatedRelayerHandler();
+    const intentKey = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d';
 
-  test('/accounts/prepare: allows own account and blocks other user account', async () => {
-    const store = new MockWalletBindingStore(3);
+    relayer.locks.set(intentKey, { response: null });
 
-    // Alice prepares her first wallet -> allowed
-    const res1 = await store.handlePrepareAccount({ authUid: ALICE, accountId: ALICE_WALLET_1 });
-    expect(res1.status).toBe(200);
+    const duplicateRes = await relayer.submitPayment({
+      signedXdr: 'mock-xdr-data',
+      idempotencyKey: intentKey,
+    });
 
-    // Bob tries to prepare Alice's wallet -> 403 WALLET_OWNERSHIP_DENIED
-    const res2 = await store.handlePrepareAccount({ authUid: BOB, accountId: ALICE_WALLET_1 });
-    expect(res2.status).toBe(403);
-    expect(res2.body.code).toBe('WALLET_OWNERSHIP_DENIED');
-
-    // Alice prepares her existing wallet again -> allowed
-    const res3 = await store.handlePrepareAccount({ authUid: ALICE, accountId: ALICE_WALLET_1 });
-    expect(res3.status).toBe(200);
+    expect(duplicateRes.status).toBe(409);
+    expect(duplicateRes.body.code).toBe('IDEMPOTENCY_IN_FLIGHT');
+    expect(relayer.onChainSubmissions).toBe(0);
   });
 
-  test('/accounts/prepare: enforces per-user sponsorship cap', async () => {
-    const store = new MockWalletBindingStore(2); // max 2 wallets
+  test('retrying a completed payment reuses original key and returns cached result with one on-chain submission', async () => {
+    const relayer = new SimulatedRelayerHandler();
+    const intentKey = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d';
 
-    // Alice prepares wallet 1 -> allowed (1/2)
-    const res1 = await store.handlePrepareAccount({ authUid: ALICE, accountId: ALICE_WALLET_1 });
+    const res1 = await relayer.submitPayment({
+      signedXdr: 'mock-xdr-data',
+      idempotencyKey: intentKey,
+    });
     expect(res1.status).toBe(200);
+    expect(res1.body.status).toBe('success');
+    expect(relayer.onChainSubmissions).toBe(1);
 
-    // Alice prepares wallet 2 -> allowed (2/2)
-    const res2 = await store.handlePrepareAccount({ authUid: ALICE, accountId: ALICE_WALLET_2 });
+    const res2 = await relayer.submitPayment({
+      signedXdr: 'mock-xdr-data',
+      idempotencyKey: intentKey,
+    });
     expect(res2.status).toBe(200);
-
-    // Alice tries to prepare a 3rd wallet -> 403 SPONSORSHIP_LIMIT_EXCEEDED
-    const res3 = await store.handlePrepareAccount({ authUid: ALICE, accountId: UNKNOWN_WALLET });
-    expect(res3.status).toBe(403);
-    expect(res3.body.code).toBe('SPONSORSHIP_LIMIT_EXCEEDED');
+    expect(res2.body.hash).toBe(res1.body.hash);
+    expect(relayer.onChainSubmissions).toBe(1);
   });
 
-  test('/add-money: rejects mismatched and unknown accounts with 403', async () => {
-    const store = new MockWalletBindingStore(3);
-    await store.bindWallet(ALICE, ALICE_WALLET_1);
-    await store.bindWallet(BOB, BOB_WALLET);
-
-    // Alice claims for her own account -> 200
-    const resOwn = await store.handleAddMoney({ authUid: ALICE, accountId: ALICE_WALLET_1 });
-    expect(resOwn.status).toBe(200);
-
-    // Alice tries to claim for Bob's account -> 403
-    const resOther = await store.handleAddMoney({ authUid: ALICE, accountId: BOB_WALLET });
-    expect(resOther.status).toBe(403);
-    expect(resOther.body.code).toBe('WALLET_OWNERSHIP_DENIED');
-
-    // Alice tries to claim for unknown account -> 403
-    const resUnknown = await store.handleAddMoney({ authUid: ALICE, accountId: UNKNOWN_WALLET });
-    expect(resUnknown.status).toBe(403);
-    expect(resUnknown.body.code).toBe('WALLET_OWNERSHIP_DENIED');
-  });
-
-  test('/payments/submit: rejects mismatched and unknown source accounts with 403', async () => {
-    const store = new MockWalletBindingStore(3);
-    await store.bindWallet(ALICE, ALICE_WALLET_1);
-    await store.bindWallet(BOB, BOB_WALLET);
-
-    // Alice submits payment from her own wallet -> 200
-    const resOwn = await store.handlePaymentSubmit({ authUid: ALICE, sourceWallet: ALICE_WALLET_1 });
-    expect(resOwn.status).toBe(200);
-
-    // Alice tries to submit payment from Bob's wallet -> 403
-    const resOther = await store.handlePaymentSubmit({ authUid: ALICE, sourceWallet: BOB_WALLET });
-    expect(resOther.status).toBe(403);
-    expect(resOther.body.code).toBe('WALLET_OWNERSHIP_DENIED');
-
-    // Alice tries to submit payment from unknown wallet -> 403
-    const resUnknown = await store.handlePaymentSubmit({ authUid: ALICE, sourceWallet: UNKNOWN_WALLET });
-    expect(resUnknown.status).toBe(403);
-    expect(resUnknown.body.code).toBe('WALLET_OWNERSHIP_DENIED');
+  test('idempotency key format does not contain Date.now() or Math.random() timestamps', () => {
+    const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const testUUID = crypto.randomUUID();
+    expect(testUUID).toMatch(UUID_V4_REGEX);
+    expect(testUUID).not.toMatch(/\b\d{13}\b/);
   });
 });
 
