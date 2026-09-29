@@ -118,9 +118,10 @@ export const TransactionItem: React.FC<TransactionItemProps> = ({
         }
         setDisplayName('Unknown');
       } else {
-        // For sent: show recipient name or C-Pay ID
-        if (transaction.recipient_name) {
-          setDisplayName(transaction.recipient_name);
+        // legacy-compat: support pilot rows written before columns were dropped
+        const recipient = transaction.recipient_name || (transaction as any).merchant_name;
+        if (recipient) {
+          setDisplayName(recipient);
           return;
         }
         if (transaction.to_address) {

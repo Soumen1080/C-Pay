@@ -28,7 +28,10 @@ export interface TransactionDetail {
   amount: string;
   status: 'pending' | 'success' | 'failed';
   created_at?: string;
-  transaction_type?: 'personal';
+  transaction_type?: 'personal' | string;
+  note?: string;
+  /* legacy-compat: pilot rows written before schema migration */
+  merchant_name?: string;
 }
 
 interface TransactionDetailModalProps {
@@ -225,7 +228,9 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
                       styles.typeBadge,
                       {
                         backgroundColor:
-                          'rgba(139, 92, 246, 0.15)',
+                          (transaction.transaction_type as string) === 'merchant'
+                            ? 'rgba(59, 130, 246, 0.15)'
+                            : 'rgba(139, 92, 246, 0.15)',
                       },
                     ]}
                   >
@@ -234,11 +239,14 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
                         styles.typeText,
                         {
                           color:
-                            '#8b5cf6',
+                            (transaction.transaction_type as string) === 'merchant'
+                              ? '#3b82f6'
+                              : '#8b5cf6',
                         },
                       ]}
                     >
-                      Personal
+                      {/* legacy-compat: pilot rows written before schema migration */}
+                      {(transaction.transaction_type as string) === 'merchant' ? 'Business' : 'Personal'}
                     </Text>
                   </View>
                 </View>
@@ -308,6 +316,14 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
                     />
                   </View>
                 </TouchableOpacity>
+              )}
+
+              {/* legacy-compat: render note or business name for pilot rows written before columns were dropped */}
+              {(transaction.note || transaction.merchant_name) && !isReceived && (
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>{TRANSACTION.NOTE_LABEL}</Text>
+                  <Text style={styles.detailValue}>{transaction.note || transaction.merchant_name}</Text>
+                </View>
               )}
 
             </View>
