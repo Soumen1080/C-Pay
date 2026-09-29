@@ -4,7 +4,6 @@
  * These tests verify that when auth is enabled the relayer:
  *   - Allows requests whose wallet belongs to the authenticated user.
  *   - Returns 403 WALLET_OWNERSHIP_DENIED when the wallet belongs to another user.
- *   - Returns 403 MERCHANT_OWNERSHIP_DENIED when the merchant wallet belongs to another user.
  *   - Skips ownership checks when Supabase persistence is not configured (no service-role key).
  *   - Skips ownership checks when auth is disabled (RELAYER_AUTH_REQUIRED=false).
  *
@@ -44,8 +43,8 @@ function makeBearerToken(sub) {
 // ─── test wallets ────────────────────────────────────────────────────────────
 
 // Real Ed25519 public keys so assertAccountId passes without mocking Stellar.
-const WALLET_A = 'GAHT4QYQNAQIZQQ7AFCBULV5FDCZIXF6GVVK4PBVLM3H52UHLMIDLQQ';
-const WALLET_B = 'GBJ3FIJHKQHC6LDLQZFNM3Y7DUJTKPBWT4SVBP4CJPVVYDCUYLPFV3S';
+const WALLET_A = 'GDUXXBTQHTSNMHFKO2BNUQNQUCVIOKEMMKD5AWIFYBKOAVMFHBUP3RYJ';
+const WALLET_B = 'GCYJAA6M7KTAOXPYVHFVOWUIGM6I3DLER24WAWY7OOUDWYHYDVEST4TZ';
 
 // Supabase user IDs.
 const USER_A = 'user-a-uid';
@@ -87,9 +86,22 @@ function buildFetchMock({
     if (urlStr.includes('/rest/v1/wallet_bindings')) {
       const parsed = new URL(urlStr);
       const authUserIdFilter = parsed.searchParams.get('auth_user_id') || '';
-      const uid = authUserIdFilter.replace(/^eq\./, '');
-      const wallets = (userWallets[uid] || []).map(w => ({ wallet_address: w }));
-      return makeResponse(true, 200, wallets);
+      if (authUserIdFilter) {
+        const uid = authUserIdFilter.replace(/^eq\./, '');
+        const wallets = (userWallets[uid] || []).map(w => ({ wallet_address: w }));
+        return makeResponse(true, 200, wallets);
+      }
+      const walletAddressFilter = parsed.searchParams.get('wallet_address') || '';
+      if (walletAddressFilter) {
+        const addr = walletAddressFilter.replace(/^eq\./, '');
+        for (const [uid, wallets] of Object.entries(userWallets)) {
+          if (wallets.includes(addr)) {
+            return makeResponse(true, 200, [{ auth_user_id: uid }]);
+          }
+        }
+        return makeResponse(true, 200, []);
+      }
+      return makeResponse(true, 200, []);
     }
 
     // Fallback – should not be reached in these tests.
@@ -136,6 +148,7 @@ async function loadServer(env = {}) {
     CPINR_ASSET_ISSUER: 'GA2SFZ4GJVMLPULSJMTY7RMIOPQD5W5JGTDSD3N7I2PR5KZRFGPQF5BJ',
     SUPABASE_URL: 'http://localhost:9999/supabase',
     SUPABASE_SERVICE_ROLE_KEY: 'test-service-role-key',
+    LEDGER_INGEST_ENABLED: 'false',
     RELAYER_AUTH_REQUIRED: 'true',
     ENABLE_ADD_MONEY: 'true',
     PORT: '0',
@@ -150,9 +163,12 @@ async function loadServer(env = {}) {
   const mod = require('./server.js');
   app = mod.app;
   activeModuleServer = mod.server;
+  activeIngestWorker = mod.ingestWorker;
 
   return app;
 }
+
+let activeIngestWorker = null;
 
 // ─── request helper ──────────────────────────────────────────────────────────
 
@@ -196,6 +212,11 @@ function postJson(appInstance, path, body, headers = {}) {
 // ─── test suites ─────────────────────────────────────────────────────────────
 
 afterEach(async () => {
+  if (activeIngestWorker && typeof activeIngestWorker.stop === 'function') {
+    activeIngestWorker.stop();
+    activeIngestWorker = null;
+  }
+
   // Close the active module server to free the port.
   if (activeModuleServer) {
     await new Promise((resolve) => {
@@ -214,7 +235,7 @@ afterEach(async () => {
     'SOROBAN_RPC_URL', 'STELLAR_NETWORK_PASSPHRASE', 'SPONSOR_SECRET',
     'DISTRIBUTION_SECRET', 'CPINR_ASSET_ISSUER', 'SUPABASE_URL',
     'SUPABASE_SERVICE_ROLE_KEY', 'RELAYER_AUTH_REQUIRED', 'ENABLE_ADD_MONEY',
-    'PORT',
+    'PORT', 'LEDGER_INGEST_ENABLED',
   ];
   ADDED_KEYS.forEach(k => delete process.env[k]);
   jest.resetModules();
@@ -228,7 +249,10 @@ describe('/accounts/prepare ownership', () => {
   beforeEach(async () => {
     expressApp = await loadServer({
       __fetchMock: buildFetchMock({
-        userWallets: { [USER_A]: [WALLET_A] },
+        userWallets: {
+          [USER_A]: [WALLET_A],
+          [USER_B]: [WALLET_B],
+        },
       }),
     });
   });
@@ -312,7 +336,6 @@ describe('ownership checks skipped when auth is disabled', () => {
       SUPABASE_SERVICE_ROLE_KEY: '',
       __fetchMock: buildFetchMock({
         userWallets: {},
-        merchantRows: {},
       }),
     });
   });
