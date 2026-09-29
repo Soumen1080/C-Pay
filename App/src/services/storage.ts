@@ -22,10 +22,7 @@ export interface Transaction {
   // Phase 2: Invisible Rail - Two-tier status system
   internal_status?: 'processing' | 'submitted' | 'confirmed' | 'failed';
   user_visible_status?: 'success' | 'failed';
-  // Transaction type: personal (P2P) or merchant (business payment)
-  transaction_type?: 'personal' | 'merchant';
-  merchant_id?: string; // Reference to merchant if transaction_type is 'merchant'
-  merchant_name?: string; // Business name (for backward compatibility)
+  transaction_type?: 'personal';
   note?: string; // Optional payment note
   sender_name?: string; // Name of the person who sent the payment
   recipient_name?: string; // Name of recipient (person or business)

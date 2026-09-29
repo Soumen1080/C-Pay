@@ -28,8 +28,7 @@ export interface TransactionDetail {
   amount: string;
   status: 'pending' | 'success' | 'failed';
   created_at?: string;
-  merchant_name?: string;
-  transaction_type?: 'personal' | 'merchant';
+  transaction_type?: 'personal';
 }
 
 interface TransactionDetailModalProps {
@@ -37,7 +36,6 @@ interface TransactionDetailModalProps {
   transaction: TransactionDetail | null;
   onClose: () => void;
   currentWallet?: string;
-  isMerchantView?: boolean;
 }
 
 export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
@@ -45,7 +43,6 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
   transaction,
   onClose,
   currentWallet,
-  isMerchantView = false,
 }) => {
   const [fromCPayId, setFromCPayId] = useState<string>('');
   const [toCPayId, setToCPayId] = useState<string>('');
@@ -142,12 +139,12 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
               <Text
                 style={[
                   styles.amountValue,
-                  { color: isMerchantView || isReceived ? '#10b981' : COLORS.text },
+                  { color: isReceived ? '#10b981' : COLORS.text },
                 ]}
-                accessibilityLabel={`Amount: ${isMerchantView || isReceived ? 'received' : 'sent'} ${formatINR(inrAmount)}`}
+                accessibilityLabel={`Amount: ${isReceived ? 'received' : 'sent'} ${formatINR(inrAmount)}`}
                 maxFontSizeMultiplier={1.3}
               >
-                {isMerchantView || isReceived ? '+' : '-'}{formatINR(inrAmount)}
+                {isReceived ? '+' : '-'}{formatINR(inrAmount)}
               </Text>
             </View>
 
@@ -222,8 +219,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
                 </Text>
               </View>
 
-              {/* Transaction Type - hide for merchant view and received transactions */}
-              {transaction.transaction_type && !isMerchantView && !isReceived && (
+              {transaction.transaction_type && !isReceived && (
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>{TRANSACTION.METHOD_LABEL}</Text>
                   <View
@@ -231,9 +227,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
                       styles.typeBadge,
                       {
                         backgroundColor:
-                          transaction.transaction_type === 'merchant'
-                            ? 'rgba(59, 130, 246, 0.15)'
-                            : 'rgba(139, 92, 246, 0.15)',
+                          'rgba(139, 92, 246, 0.15)',
                       },
                     ]}
                   >
@@ -242,11 +236,11 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
                         styles.typeText,
                         {
                           color:
-                            transaction.transaction_type === 'merchant' ? '#3b82f6' : '#8b5cf6',
+                            '#8b5cf6',
                         },
                       ]}
                     >
-                      {transaction.transaction_type === 'merchant' ? 'Merchant QR' : 'Personal'}
+                      Personal
                     </Text>
                   </View>
                 </View>
@@ -318,13 +312,6 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
                 </TouchableOpacity>
               )}
 
-              {/* Merchant Name - hide for merchant view and received transactions */}
-              {transaction.merchant_name && !isMerchantView && !isReceived && (
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>{TRANSACTION.NOTE_LABEL}</Text>
-                  <Text style={styles.detailValue}>{transaction.merchant_name}</Text>
-                </View>
-              )}
             </View>
           </ScrollView>
 

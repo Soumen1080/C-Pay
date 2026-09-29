@@ -18,15 +18,13 @@ import { Button } from './Button';
 
 export interface PaymentReviewSheetProps {
   visible: boolean;
-  /** Resolved recipient or merchant display name (may be empty if unknown). */
+  /** Resolved recipient display name (may be empty if unknown). */
   recipientName?: string;
   /** C-Pay ID or wallet fingerprint shown under the name. */
   cpayId: string;
   /** Amount in the user-visible credit unit, as a string. */
   amount: string;
   note?: string;
-  /** Whether this is a merchant payment (changes identity icon/label). */
-  isMerchant: boolean;
   /** Stellar network id (defaults to the configured network). */
   network?: string;
   /** True while authenticating / submitting — locks the sheet and shows the CTA spinner. */
@@ -46,8 +44,8 @@ const formatNetworkLabel = (network: string): string => {
 /**
  * Dedicated payment review sheet shown before wallet unlock. Used by both
  * manual send and scan-to-pay so every payment is confirmed with the same
- * trusted summary: recipient/merchant identity, C-Pay ID, amount, note,
- * network, payment type and fee sponsorship state.
+ * trusted summary: recipient identity, C-Pay ID, amount, note, network,
+ * payment type and fee sponsorship state.
  */
 export const PaymentReviewSheet: React.FC<PaymentReviewSheetProps> = ({
   visible,
@@ -55,7 +53,6 @@ export const PaymentReviewSheet: React.FC<PaymentReviewSheetProps> = ({
   cpayId,
   amount,
   note,
-  isMerchant,
   network = BLOCKCHAIN_CONFIG.NETWORK,
   submitting = false,
   onConfirm,
@@ -93,18 +90,18 @@ export const PaymentReviewSheet: React.FC<PaymentReviewSheetProps> = ({
             showsVerticalScrollIndicator={false}
             bounces={false}
           >
-            {/* Recipient / merchant identity */}
+            {/* Recipient identity */}
             <View style={styles.identityCard}>
-              <View style={[styles.identityIcon, isMerchant ? styles.identityIconMerchant : styles.identityIconPerson]}>
+              <View style={[styles.identityIcon, styles.identityIconPerson]}>
                 <Ionicons
-                  name={isMerchant ? 'storefront' : 'person'}
+                  name="person"
                   size={24}
-                  color={isMerchant ? COLORS.secondary : COLORS.primary}
+                  color={COLORS.primary}
                 />
               </View>
               <View style={styles.identityText}>
                 <Text style={styles.identityLabel}>
-                  {isMerchant ? 'Paying merchant' : 'Sending to'}
+                  Sending to
                 </Text>
                 <Text style={styles.identityName} numberOfLines={1}>
                   {recipientName || 'Recipient'}
@@ -137,7 +134,7 @@ export const PaymentReviewSheet: React.FC<PaymentReviewSheetProps> = ({
               <DetailRow
                 icon="swap-horizontal-outline"
                 label="Payment type"
-                value={isMerchant ? 'Merchant payment' : 'Personal transfer'}
+                value="Personal transfer"
               />
               <View style={styles.detailDivider} />
               <DetailRow

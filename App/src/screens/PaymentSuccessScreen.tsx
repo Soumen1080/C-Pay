@@ -32,7 +32,6 @@ interface PaymentSuccessScreenProps {
       processingTime?: number; // in seconds
       timestamp?: string;
       note?: string;
-      isMerchantPayment?: boolean;
     };
   };
 }
@@ -50,7 +49,6 @@ export const PaymentSuccessScreen: React.FC<PaymentSuccessScreenProps> = ({
     processingTime = 2,
     timestamp,
     note,
-    isMerchantPayment = false,
   } = route.params;
 
   const [currentTime] = useState(
@@ -138,8 +136,7 @@ export const PaymentSuccessScreen: React.FC<PaymentSuccessScreenProps> = ({
     amount: amount,
     status: 'success',
     created_at: new Date().toISOString(),
-    merchant_name: isMerchantPayment ? recipientName : undefined,
-    transaction_type: isMerchantPayment ? 'merchant' : 'personal',
+    transaction_type: 'personal',
   };
 
   return (

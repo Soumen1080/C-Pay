@@ -55,7 +55,6 @@ export const A11Y = {
     `${params.direction} ${params.amount} ${params.direction === 'Received from' ? 'from' : 'to'} ${params.counterparty}. ${params.status}`,
 
   // QR
-  MERCHANT_QR_CODE: (businessName: string) => `QR code for ${businessName}`,
   USER_QR_CODE: 'Your personal C-Pay QR code',
 
   // Quick-amount chips
@@ -63,7 +62,6 @@ export const A11Y = {
 
   // Profile photo
   PROFILE_PHOTO: (name: string) => `Profile photo for ${name}`,
-  MERCHANT_LOGO: (name: string) => `Logo for ${name}`,
 };
 
 // ─── Onboarding ───────────────────────────────────────────────────────────────
@@ -139,7 +137,6 @@ export const PAYMENT = {
   CONFIRM_AND_PAY: 'Confirm & Pay',
   CANCEL: 'Cancel',
   SENDING_TO: 'Sending to',
-  PAYING_MERCHANT: 'Paying merchant',
   NETWORK_FEE_SPONSORED: 'Sponsored by C-Pay',
   UNLOCK_HINT: "You'll confirm with your PIN or biometrics next.",
   SUCCESS_TITLE: 'Payment Sent',
@@ -169,7 +166,7 @@ export const TRANSACTION = {
   TO_LABEL: 'To',
   TYPE_LABEL: 'Type',
   METHOD_LABEL: 'Payment Method',
-  NOTE_LABEL: 'Note/Merchant',
+  NOTE_LABEL: 'Note',
   HASH_LABEL: 'Transaction Hash',
 };
 
@@ -187,13 +184,10 @@ export const PROFILE = {
   EDIT_PHOTO: 'Change profile photo',
   SECURITY_SECTION: 'Security',
   PREFERENCES_SECTION: 'Preferences',
-  MERCHANT_SECTION: 'Merchant',
   SIGN_OUT: 'Sign out',
   CHANGE_PIN: 'Change PIN',
   BIOMETRIC_LABEL: 'Biometric unlock',
   NOTIFICATIONS_LABEL: 'Notifications',
-  BECOME_MERCHANT: 'Become a Merchant',
-  MERCHANT_DASHBOARD: 'Merchant Dashboard',
 };
 
 // ─── QR ───────────────────────────────────────────────────────────────────────
@@ -209,27 +203,6 @@ export const QR = {
   SCAN_BUTTON: 'Scan to Pay',
   SHOW_QR_BUTTON: 'Show QR',
   CREATE_QR_BUTTON: 'Create QR',
-};
-
-// ─── Merchant ─────────────────────────────────────────────────────────────────
-
-export const MERCHANT = {
-  REGISTER_TITLE: 'Become a Merchant',
-  DASHBOARD_TITLE: 'Merchant Dashboard',
-  TRANSACTIONS_TITLE: 'Merchant Transactions',
-  QR_GENERATOR_TITLE: 'Payment QR',
-  GLOBAL_QR_TITLE: 'My QR Code',
-  BUSINESS_NAME_LABEL: 'Business name',
-  OWNER_NAME_LABEL: "Owner's name",
-  CATEGORY_LABEL: 'Category',
-  ADDRESS_LABEL: 'Business address',
-  PHONE_LABEL: 'Contact phone',
-  EMAIL_LABEL: 'Business email',
-  REGISTER_BUTTON: 'Register as Merchant',
-  TOTAL_REVENUE_LABEL: 'Total Revenue',
-  TOTAL_TX_LABEL: 'Total Transactions',
-  NO_TRANSACTIONS: 'No payments yet',
-  NO_TRANSACTIONS_DESC: 'Payments you receive will appear here',
 };
 
 // ─── Wallet Backup & Restore ──────────────────────────────────────────────────
