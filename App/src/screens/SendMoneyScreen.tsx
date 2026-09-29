@@ -467,11 +467,11 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({ navigation, ro
 
   return (
     <Screen
-      preset="scroll"
+      scroll
       loading={loading || submitting}
       loadingText="Processing payment..."
       header={<Header title="Send Pilot Credits" onBack={handleBackPress} />}
-      bottomAction={
+      footer={
         <BottomActionBar>
           <Button
             title={`Send ${amount ? formatMoneyAmount(parseFloat(amount)) : MONEY_UNIT_LABEL}`}
