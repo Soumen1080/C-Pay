@@ -33,7 +33,7 @@ export interface AmountInputProps extends Omit<TextInputProps, 'keyboardType'> {
 /**
  * Large numeric amount entry with currency symbol, unit label, optional
  * quick-amount chips and helper/error messaging. Shared by send / request /
- * merchant flows for a single consistent money-entry experience.
+ * payment flows for a single consistent money-entry experience.
  */
 export const AmountInput = forwardRef<TextInput, AmountInputProps>(
   (

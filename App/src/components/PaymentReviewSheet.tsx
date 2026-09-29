@@ -263,9 +263,6 @@ const styles = StyleSheet.create({
   identityIconPerson: {
     backgroundColor: COLORS.primaryLight,
   },
-  identityIconMerchant: {
-    backgroundColor: COLORS.successBg,
-  },
   identityText: {
     flex: 1,
   },

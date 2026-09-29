@@ -22,27 +22,6 @@ describe('getPaymentFailureCopy', () => {
     expect(copy.errorMessage.toLowerCase()).toContain('session');
   });
 
-  // ──────────────────────────────────────────────────────
-  // Contract-specific support codes
-  // ──────────────────────────────────────────────────────
-  test('CONTRACT_MERCHANT_MISSING → merchant not ready, support category', () => {
-    const copy = getPaymentFailureCopy({ code: 'CONTRACT_MERCHANT_MISSING' });
-    expect(copy.errorMessage).toMatch(/merchant/i);
-    expect(copy.category).toBe('support');
-  });
-
-  test('CONTRACT_MERCHANT_INACTIVE → merchant inactive, support category', () => {
-    const copy = getPaymentFailureCopy({ code: 'CONTRACT_MERCHANT_INACTIVE' });
-    expect(copy.errorMessage).toMatch(/inactive/i);
-    expect(copy.category).toBe('support');
-  });
-
-  test('CONTRACT_MERCHANT_MISMATCH → QR code mismatch, support category', () => {
-    const copy = getPaymentFailureCopy({ code: 'CONTRACT_MERCHANT_MISMATCH' });
-    expect(copy.errorMessage).toMatch(/mismatch|qr/i);
-    expect(copy.category).toBe('support');
-  });
-
   test('CONTRACT_INTENT_SOURCE_MISMATCH → wallet mismatch, support category', () => {
     const copy = getPaymentFailureCopy({ code: 'CONTRACT_INTENT_SOURCE_MISMATCH' });
     expect(copy.errorMessage).toMatch(/wallet/i);

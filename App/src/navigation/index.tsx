@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, StyleSheet } from 'react-native';
+import { StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -18,8 +18,6 @@ import { LoginScreen } from '../screens/LoginScreen';
 import { RestoreWalletScreen } from '../screens/RestoreWalletScreen';
 import { HomeScreen } from '../screens/HomeScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
-import { ScanScreen } from '../screens/ScanScreen';
-import { QRGeneratorScreen } from '../screens/QRGeneratorScreen';
 import { TransactionHistoryScreen } from '../screens/TransactionHistoryScreen';
 import { SendMoneyScreen } from '../screens/SendMoneyScreen';
 import { ProfileSetupScreen } from '../screens/ProfileSetupScreen';
@@ -51,7 +49,6 @@ type RootStackParamList = {
   };
   Login: undefined;
   MainTabs: undefined;
-  Scan: { returnTo?: string };
   SendMoney: {
     recipientAddress?: string;
     amount?: string;
@@ -64,7 +61,6 @@ type RootStackParamList = {
   PaymentProcessing: { amount: string; recipientName: string; recipientAddress: string };
   PaymentSuccess: { transactionHash: string; fromAddress: string; amount: string; recipientName: string; recipientAddress: string; processingTime?: number; timestamp?: string; note?: string };
   PaymentFailure: { amount: string; recipientName: string; recipientAddress: string; errorMessage?: string; errorReason?: string; errorCode?: string; category?: 'retryable' | 'support'; timestamp?: string; note?: string; idempotencyKey?: string };
-  QRGenerator: undefined;
   TransactionHistory: { highlightTransaction?: string };
   SecurityCenter: undefined;
   Info: { doc: InfoDoc };
@@ -72,25 +68,13 @@ type RootStackParamList = {
 
 type MainTabsParamList = {
   Home: undefined;
-  ScanPlaceholder: undefined;
   Profile: undefined;
 };
 
 const Stack = createStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabsParamList>();
 
-const linking = {
-  prefixes: ['cpay://', 'https://cpay.app'],
-  config: {
-    screens: {
-      MerchantRegistration: 'MainTabs',
-      MerchantDashboard: 'MainTabs',
-      MerchantQRGenerator: 'MainTabs',
-      MerchantGlobalQR: 'MainTabs',
-      MerchantTransactions: 'MainTabs',
-    },
-  },
-};
+const linking = { prefixes: ['cpay://', 'https://cpay.app'] };
 
 const TAB_BAR_CONTENT_HEIGHT = 56;
 const MIN_TAB_BAR_BOTTOM_PADDING = SPACING.sm;
@@ -117,7 +101,7 @@ const MainTabs = () => {
         },
         tabBarItemStyle: styles.tabBarItem,
         tabBarLabelStyle: styles.tabBarLabel,
-        tabBarShowLabel: route.name !== 'ScanPlaceholder',
+        tabBarShowLabel: true,
       })}
     >
       <Tab.Screen
@@ -129,30 +113,6 @@ const MainTabs = () => {
             <Ionicons name={focused ? 'home' : 'home-outline'} size={22} color={color} />
           ),
           headerTitle: 'C-Pay',
-        }}
-      />
-      <Tab.Screen
-        name="ScanPlaceholder"
-        component={View}
-        listeners={({ navigation }) => ({
-          tabPress: (e) => {
-            e.preventDefault();
-            const parent = navigation.getParent();
-            if (parent) {
-              parent.navigate('Scan' as never);
-            }
-          },
-        })}
-        options={{
-          tabBarLabel: '',
-          tabBarIcon: ({ focused }) => (
-            <View style={styles.scanButton}>
-              <View style={[styles.scanButtonInner, focused && styles.scanButtonFocused]}>
-                <Ionicons name="scan" size={26} color={COLORS.textInverse} />
-              </View>
-            </View>
-          ),
-          headerShown: false,
         }}
       />
       <Tab.Screen
@@ -205,7 +165,6 @@ export const Navigation = () => {
         <Stack.Screen name="RestoreWallet" component={RestoreWalletScreen} />
         <Stack.Screen name="Login" component={LoginScreen} />
         <Stack.Screen name="MainTabs" component={MainTabs} />
-        <Stack.Screen name="Scan" component={ScanScreen} />
         <Stack.Screen 
           name="SendMoney" 
           component={SendMoneyScreen}
@@ -234,14 +193,6 @@ export const Navigation = () => {
           component={PaymentFailureScreen}
           options={{
             headerShown: false,
-          }}
-        />
-        <Stack.Screen 
-          name="QRGenerator" 
-          component={QRGeneratorScreen}
-          options={{
-            headerShown: true,
-            headerTitle: 'QR Generator (Testing)',
           }}
         />
         <Stack.Screen 

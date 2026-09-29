@@ -10,7 +10,7 @@ describe('storage.ts — local-first offline storage & server-authoritative hist
   test('saveTransaction stores transaction in local storage without client Supabase mutation', async () => {
     const mockTx = {
       tx_hash: '1111111111222222222233333333334444444444555555555566666666667777',
-      to_address: 'GCMERCHANTRECEIVER',
+      to_address: 'GCPAYRECEIVER',
       from_address: 'GCPAYER',
       amount: '25.00',
       status: 'pending' as const,
@@ -30,7 +30,7 @@ describe('storage.ts — local-first offline storage & server-authoritative hist
     const txHash = '1111111111222222222233333333334444444444555555555566666666667777';
     const mockTx = {
       tx_hash: txHash,
-      to_address: 'GCMERCHANTRECEIVER',
+      to_address: 'GCPAYRECEIVER',
       from_address: 'GCPAYER',
       amount: '25.00',
       status: 'pending' as const,

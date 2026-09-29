@@ -211,9 +211,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>{TRANSACTION.TYPE_LABEL}</Text>
                 <Text style={styles.detailValue}>
-                  {isMerchantView
-                    ? TRANSACTION.TYPE_PAYMENT_RECEIVED
-                    : isReceived
+                  {isReceived
                     ? TRANSACTION.TYPE_RECEIVED
                     : TRANSACTION.TYPE_SENT}
                 </Text>

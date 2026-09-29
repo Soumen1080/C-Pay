@@ -2,7 +2,7 @@
  * How the user can recover from a payment failure:
  * - `retryable`: a plain retry is likely to succeed (network/timeout/service).
  * - `support`: retrying won't help on its own — the user needs to fix
- *   something (re-auth, merchant setup) or contact support.
+ *   something (re-auth or account setup) or contact support.
  */
 export type PaymentFailureCategory = 'retryable' | 'support';
 
@@ -17,10 +17,6 @@ export type PaymentFailureCopy = {
 const SUPPORT_CODES = new Set([
   'AUTH_REQUIRED',
   'WALLET_OWNERSHIP_DENIED',
-  'MERCHANT_OWNERSHIP_DENIED',
-  'CONTRACT_MERCHANT_MISSING',
-  'CONTRACT_MERCHANT_INACTIVE',
-  'CONTRACT_MERCHANT_MISMATCH',
   'CONTRACT_INTENT_SOURCE_MISMATCH',
   'CONTRACT_INTENT_AMOUNT_MISMATCH',
 ]);
@@ -76,38 +72,6 @@ const buildFailureCopy = (error: any): Omit<PaymentFailureCopy, 'category'> => {
     };
   }
 
-  if (errorCode === 'MERCHANT_OWNERSHIP_DENIED') {
-    return {
-      errorMessage: 'Merchant Not Authorised',
-      errorReason: 'The merchant wallet used in this request does not belong to your account. Sign out, sign back in, and try again.',
-      errorCode,
-    };
-  }
-
-  if (errorCode === 'CONTRACT_MERCHANT_MISSING') {
-    return {
-      errorMessage: 'Merchant Not Ready',
-      errorReason: 'This merchant has not finished C-Pay contract setup yet. Ask the merchant to open their app and sync their merchant account before accepting QR payments.',
-      errorCode,
-    };
-  }
-
-  if (errorCode === 'CONTRACT_MERCHANT_INACTIVE') {
-    return {
-      errorMessage: 'Merchant Inactive',
-      errorReason: 'This merchant is currently inactive on C-Pay. Ask the merchant to reactivate their merchant account.',
-      errorCode,
-    };
-  }
-
-  if (errorCode === 'CONTRACT_MERCHANT_MISMATCH') {
-    return {
-      errorMessage: 'QR Code Mismatch',
-      errorReason: 'This merchant QR code does not match the merchant account registered with C-Pay. Ask the merchant to generate a fresh QR code.',
-      errorCode,
-    };
-  }
-
   if (errorCode === 'CONTRACT_INTENT_SOURCE_MISMATCH') {
     return {
       errorMessage: 'Wallet Mismatch',
@@ -119,7 +83,7 @@ const buildFailureCopy = (error: any): Omit<PaymentFailureCopy, 'category'> => {
   if (errorCode === 'CONTRACT_INTENT_AMOUNT_MISMATCH' || lowerMessage.includes('does not match the contract intent amount')) {
     return {
       errorMessage: 'Payment Amount Changed',
-      errorReason: `The QR payment request was created for a different amount than the payment being sent. ${safeNoDeductionText} Ask the merchant to generate a fresh QR code, then try again.`,
+      errorReason: `The payment request was created for a different amount than the payment being sent. ${safeNoDeductionText} Create a fresh payment request, then try again.`,
       errorCode,
     };
   }

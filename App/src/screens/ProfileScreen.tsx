@@ -24,7 +24,6 @@ import { AlertManager } from '../utils/alert';
 import { formatWalletFingerprint, getCurrentUserCPayId } from '../utils/cpayId';
 import { getMediaLibraryDownloadErrorMessage, requestPhotoSavePermission } from '../utils/mediaLibrary';
 import { clearSessionPin } from '../services/wallet';
-import { generatePaymentQR } from '../utils/qrCode';
 
 interface ProfileScreenProps {
   navigation: any;
@@ -338,7 +337,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
 
                   <View style={styles.qrCodeWrapper}>
                     <QRCode
-                      value={generatePaymentQR(walletAddress, '0', displayName || 'C-Pay User', '')}
+                      value={JSON.stringify({ type: 'cryptopay', recipient: walletAddress, amount: '0', name: displayName || 'C-Pay User' })}
                       size={220}
                       backgroundColor="white"
                       color={COLORS.primary}

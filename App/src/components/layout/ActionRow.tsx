@@ -37,7 +37,7 @@ export interface ActionRowProps {
 /**
  * Tappable settings / navigation row: leading icon badge, title + subtitle,
  * and a trailing value, chevron or custom control. Used across Profile,
- * merchant dashboards and menus.
+ * account dashboards and menus.
  */
 export const ActionRow: React.FC<ActionRowProps> = ({
   icon,

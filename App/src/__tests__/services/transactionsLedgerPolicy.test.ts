@@ -49,7 +49,7 @@ describe('transactions ledger is not client-writable (issue #31)', () => {
     await saveTransaction({
       tx_hash: TX_HASH,
       from_address: 'GCPAYER',
-      to_address: 'GCMERCHANTRECEIVER',
+      to_address: 'GCPAYRECEIVER',
       amount: '50000.00',
       status: 'pending' as const,
     });
@@ -72,7 +72,7 @@ describe('transactions ledger is not client-writable (issue #31)', () => {
     await saveTransaction({
       tx_hash: TX_HASH,
       from_address: 'GCPAYER',
-      to_address: 'GCMERCHANTRECEIVER',
+      to_address: 'GCPAYRECEIVER',
       amount: '50000.00',
       status: 'pending' as const,
     });
