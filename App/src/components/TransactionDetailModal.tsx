@@ -11,7 +11,7 @@ import {
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, TYPOGRAPHY, createThemedStyles, useTheme } from '../constants/theme';
-import { convertAssetToINR, formatINR } from '../utils/currency';
+import { formatMoneyAmount } from '../utils/currency';
 import { formatDateLong } from '../utils/date';
 import { formatWalletFingerprint, getCPayIdByWallet } from '../utils/cpayId';
 import { formatTransactionHash, getExplorerUrl, isValidTransactionHash } from '../services/blockchain';
@@ -28,8 +28,8 @@ export interface TransactionDetail {
   amount: string;
   status: 'pending' | 'success' | 'failed';
   created_at?: string;
-  merchant_name?: string;
-  transaction_type?: 'personal' | 'merchant';
+  transaction_type?: 'personal' | string;
+  note?: string;
 }
 
 interface TransactionDetailModalProps {
@@ -37,7 +37,6 @@ interface TransactionDetailModalProps {
   transaction: TransactionDetail | null;
   onClose: () => void;
   currentWallet?: string;
-  isMerchantView?: boolean;
 }
 
 export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
@@ -45,7 +44,6 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
   transaction,
   onClose,
   currentWallet,
-  isMerchantView = false,
 }) => {
   useTheme();
   const [fromCPayId, setFromCPayId] = useState<string>('');
@@ -142,12 +140,12 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
               <Text
                 style={[
                   styles.amountValue,
-                  { color: isMerchantView || isReceived ? COLORS.transactionIncoming : COLORS.text },
+                  { color: isReceived ? COLORS.transactionIncoming : COLORS.text },
                 ]}
-                accessibilityLabel={`Amount: ${isMerchantView || isReceived ? 'received' : 'sent'} ${formatMoneyAmount(amount)}`}
+                accessibilityLabel={`Amount: ${isReceived ? 'received' : 'sent'} ${formatMoneyAmount(amount)}`}
                 maxFontSizeMultiplier={1.3}
               >
-                {isMerchantView || isReceived ? '+' : '-'}{formatMoneyAmount(amount)}
+                {isReceived ? '+' : '-'}{formatMoneyAmount(amount)}
               </Text>
             </View>
 
@@ -214,26 +212,21 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>{TRANSACTION.TYPE_LABEL}</Text>
                 <Text style={styles.detailValue}>
-                  {isMerchantView
-                    ? TRANSACTION.TYPE_PAYMENT_RECEIVED
-                    : isReceived
+                  {isReceived
                     ? TRANSACTION.TYPE_RECEIVED
                     : TRANSACTION.TYPE_SENT}
                 </Text>
               </View>
 
-              {/* Transaction Type - hide for merchant view and received transactions */}
-              {transaction.transaction_type && !isMerchantView && !isReceived && (
+              {/* Transaction method for outgoing transfers */}
+              {transaction.transaction_type && !isReceived && (
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>{TRANSACTION.METHOD_LABEL}</Text>
                   <View
                     style={[
                       styles.typeBadge,
                       {
-                        backgroundColor:
-                          transaction.transaction_type === 'merchant'
-                            ? COLORS.transactionMerchantBg
-                            : COLORS.transactionTransferBg,
+                        backgroundColor: COLORS.transactionTransferBg,
                       },
                     ]}
                   >
@@ -241,12 +234,11 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
                       style={[
                         styles.typeText,
                         {
-                          color:
-                            transaction.transaction_type === 'merchant' ? COLORS.transactionMerchant : COLORS.transactionTransfer,
+                          color: COLORS.transactionTransfer,
                         },
                       ]}
                     >
-                      {transaction.transaction_type === 'merchant' ? 'Merchant QR' : 'Personal'}
+                      Personal
                     </Text>
                   </View>
                 </View>
@@ -318,11 +310,10 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
                 </TouchableOpacity>
               )}
 
-              {/* Merchant Name - hide for merchant view and received transactions */}
-              {transaction.merchant_name && !isMerchantView && !isReceived && (
+              {transaction.note && !isReceived && (
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>{TRANSACTION.NOTE_LABEL}</Text>
-                  <Text style={styles.detailValue}>{transaction.merchant_name}</Text>
+                  <Text style={styles.detailValue}>{transaction.note}</Text>
                 </View>
               )}
             </View>

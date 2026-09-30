@@ -1,5 +1,5 @@
 /**
- * Issue #32 — merchant registration silently destroyed the user's cloud wallet backup.
+ * Issue #32 — a second-email registration flow silently destroyed the user's cloud wallet backup.
  *
  * The old flow called supabase.auth.signInWithOtp({ shouldCreateUser: true })
  * with the *business* email while the wallet owner was already signed in, then
@@ -69,13 +69,11 @@ describe('wallet backup session-swap guard (issue #32)', () => {
     });
   });
 
-  test('the session-minting merchant OTP pair no longer exists', () => {
+  test('the session-minting second-email OTP pair no longer exists', () => {
     // sendEmailOTP / verifyEmailOTP were the exact functions that swapped the
     // session on the business email. They must not come back.
     expect((authModule as Record<string, unknown>).sendEmailOTP).toBeUndefined();
     expect((authModule as Record<string, unknown>).verifyEmailOTP).toBeUndefined();
-    expect((authModule as Record<string, unknown>).sendMerchantContactOtp).toBeUndefined();
-    expect((authModule as Record<string, unknown>).verifyMerchantContactOtp).toBeUndefined();
   });
 
   test('blocks a second-email OTP when a backup is bound to the current session', async () => {

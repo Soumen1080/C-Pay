@@ -284,7 +284,7 @@ export const ProfileSetupScreen: React.FC<ProfileSetupScreenProps> = ({ navigati
             autoCorrect={false}
             maxLength={50}
             editable={!loading}
-            helper="This name will be visible to merchants and other users"
+            helper="This name will be visible to other users"
           />
 
           {/* Info Card */}

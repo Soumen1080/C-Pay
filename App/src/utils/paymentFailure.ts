@@ -192,7 +192,15 @@ const buildFailureCopy = (error: any): Omit<PaymentFailureCopy, 'category'> => {
   if (errorCode === 'CONTRACT_INTENT_AMOUNT_MISMATCH' || lowerMessage.includes('does not match the contract intent amount')) {
     return {
       errorMessage: 'Payment Amount Changed',
-      errorReason: `The QR payment request was created for a different amount than the payment being sent. ${safeNoDeductionText} Ask the merchant to generate a fresh QR code, then try again.`,
+      errorReason: `The payment request was created for a different amount than the payment being sent. ${safeNoDeductionText} Create a fresh payment request, then try again.`,
+      errorCode,
+    };
+  }
+
+  if (errorCode === 'FX_RATE_UNAVAILABLE') {
+    return {
+      errorMessage: 'Exchange Rate Unavailable',
+      errorReason: `The exchange rate service is temporarily unavailable. ${safeNoDeductionText} Please try again in a few moments.`,
       errorCode,
     };
   }

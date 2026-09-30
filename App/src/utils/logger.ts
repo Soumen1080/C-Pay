@@ -7,7 +7,7 @@ export enum LogLevel {
 }
 
 // In production, only log ERRORs. In development, log everything.
-const CURRENT_LOG_LEVEL = __DEV__ ? LogLevel.DEBUG : LogLevel.ERROR;
+const CURRENT_LOG_LEVEL = typeof __DEV__ !== 'undefined' && __DEV__ ? LogLevel.DEBUG : LogLevel.ERROR;
 
 export const Logger = {
   debug: (...args: any[]) => {

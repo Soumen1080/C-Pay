@@ -108,7 +108,7 @@ async function checkRateLimit(): Promise<{
   try {
     const rateLimitData = await AsyncStorage.getItem(OTP_RATE_LIMIT_KEY);
     const now = new Date();
-    
+
     if (!rateLimitData) {
       return { allowed: true, remainingAttempts: MAX_OTP_ATTEMPTS_PER_DAY };
     }
@@ -148,7 +148,7 @@ async function incrementAttempt(): Promise<void> {
   try {
     const rateLimitData = await AsyncStorage.getItem(OTP_RATE_LIMIT_KEY);
     const now = new Date();
-    
+
     // Calculate reset time (midnight of next day)
     const resetDate = new Date(now);
     resetDate.setHours(24, 0, 0, 0);

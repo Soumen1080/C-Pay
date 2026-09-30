@@ -12,7 +12,6 @@ interface Transaction {
   id?: string;
   tx_hash?: string;
   transaction_id?: string;
-  merchant_name?: string;
   sender_name?: string;
   recipient_name?: string;
   to_address?: string;
@@ -120,9 +119,10 @@ export const TransactionItem: React.FC<TransactionItemProps> = ({
         }
         setDisplayName('Unknown');
       } else {
-        // For sent: show recipient name or C-Pay ID
-        if (transaction.recipient_name || transaction.merchant_name) {
-          setDisplayName(transaction.recipient_name || transaction.merchant_name || 'Unknown');
+        // Prefer the stored recipient name when available
+        const recipient = transaction.recipient_name;
+        if (recipient) {
+          setDisplayName(recipient);
           return;
         }
         if (transaction.to_address) {

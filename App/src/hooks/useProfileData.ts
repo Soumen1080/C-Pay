@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase } from '../../services/supabase';
-import { getCurrentUserCPayId } from '../../utils/cpayId';
-import { AlertManager } from '../../utils/alert';
+import { supabase } from '../services/supabase';
+import { getCurrentUserCPayId } from '../utils/cpayId';
+import { AlertManager } from '../utils/alert';
 import { useFocusEffect } from '@react-navigation/native';
 import React from 'react';
 

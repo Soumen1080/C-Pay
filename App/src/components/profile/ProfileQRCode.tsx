@@ -6,10 +6,10 @@ import ViewShot from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
 import * as MediaLibrary from 'expo-media-library';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS, createThemedStyles } from '../../constants/theme';
-import { generatePaymentQR } from '../../utils/qrCode';
 import { formatWalletFingerprint } from '../../utils/cpayId';
 import { AlertManager } from '../../utils/alert';
 import { getMediaLibraryDownloadErrorMessage, requestPhotoSavePermission } from '../../utils/mediaLibrary';
+import { InitialAvatar } from '../InitialAvatar';
 
 interface ProfileQRCodeProps {
   profilePhoto: string | null;
@@ -83,17 +83,18 @@ export const ProfileQRCode: React.FC<ProfileQRCodeProps> = ({
             <ViewShot ref={qrCodeRef} options={{ format: 'png', quality: 1.0 }}>
               <View style={styles.shareableQRCard}>
                 <View style={styles.shareCardProfile}>
-                  <Image
-                    source={profilePhoto ? { uri: profilePhoto } : require('../../../assets/default-profile-image-cryptopay.png')}
-                    style={styles.shareCardProfilePhoto}
-                  />
+                  {profilePhoto ? (
+                    <Image source={{ uri: profilePhoto }} style={styles.shareCardProfilePhoto} />
+                  ) : (
+                    <InitialAvatar name={displayName || 'User'} id={walletAddress} size={70} style={styles.shareCardProfilePhoto} />
+                  )}
                   {!!displayName && <Text style={styles.shareCardName}>{displayName}</Text>}
                   <Text style={styles.shareCardAddress}>{cpayId || formatWalletFingerprint(walletAddress)}</Text>
                 </View>
 
                 <View style={styles.qrCodeWrapper}>
                   <QRCode
-                    value={generatePaymentQR(walletAddress, '0', displayName || 'C-Pay User', '')}
+                    value={JSON.stringify({ type: 'cryptopay', recipient: walletAddress, amount: '0', name: displayName || 'C-Pay User' })}
                     size={220}
                     backgroundColor="white"
                     color={COLORS.primary}
@@ -248,4 +249,4 @@ const getStyles = () => createThemedStyles((COLORS) => ({
   shareButtonText: {
     color: COLORS.textInverse,
   },
-}))();
+}));

@@ -7,8 +7,16 @@ import {
   StyleSheet,
   TouchableOpacity,
   Switch,
+  Image,
+  Platform,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
+import * as MediaLibrary from 'expo-media-library';
+import * as Sharing from 'expo-sharing';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import QRCode from 'react-native-qrcode-svg';
+import ViewShot from 'react-native-view-shot';
 import { Ionicons } from '@expo/vector-icons';
 import { InitialAvatar } from '../components/InitialAvatar';
 import { useFocusEffect } from '@react-navigation/native';
@@ -16,10 +24,10 @@ import { supabase } from '../services/supabase';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS, createThemedStyles, useTheme } from '../constants/theme';
 import { Screen, Section, ActionRow } from '../components';
 import { AlertManager } from '../utils/alert';
+import { formatWalletFingerprint, getCurrentUserCPayId } from '../utils/cpayId';
+import { getMediaLibraryDownloadErrorMessage, requestPhotoSavePermission } from '../utils/mediaLibrary';
+import { Logger } from '../utils/logger';
 import { clearSessionPin } from '../services/wallet';
-import { useProfileData } from '../hooks/useProfileData';
-import { ProfileHeader } from '../components/profile/ProfileHeader';
-import { ProfileQRCode } from '../components/profile/ProfileQRCode';
 interface ProfileScreenProps {
   navigation: any;
 }
@@ -327,7 +335,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
 
                   <View style={styles.qrCodeWrapper}>
                     <QRCode
-                      value={generatePaymentQR(walletAddress, '0', displayName || 'C-Pay User', '')}
+                      value={JSON.stringify({ type: 'cryptopay', recipient: walletAddress, amount: '0', name: displayName || 'C-Pay User' })}
                       size={220}
                       backgroundColor="white"
                       color={COLORS.primary}

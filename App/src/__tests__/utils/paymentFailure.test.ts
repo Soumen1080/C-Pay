@@ -168,23 +168,6 @@ describe('getPaymentFailureCopy', () => {
     expect(copy.errorReason.length).toBeGreaterThan(0);
   });
 
-  // ──────────────────────────────────────────────────────
-  // Deleted unreachable codes have no dedicated mapping
-  // ──────────────────────────────────────────────────────
-  test('unreachable merchant/contract codes have no dedicated mapping and fall back', () => {
-    const deletedCodes = [
-      'MERCHANT_OWNERSHIP_DENIED',
-      'CONTRACT_MERCHANT_MISSING',
-      'CONTRACT_MERCHANT_INACTIVE',
-      'CONTRACT_MERCHANT_MISMATCH',
-    ];
-
-    for (const code of deletedCodes) {
-      const copy = getPaymentFailureCopy({ code });
-      expect(copy.errorMessage).toBe('Transaction Failed');
-      expect(copy.errorReason).toContain('The payment could not be completed.');
-    }
-  });
 
   // ──────────────────────────────────────────────────────
   // Relayer emission parity & drift prevention

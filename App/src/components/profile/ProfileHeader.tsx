@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS, createThemedStyles } from '../../constants/theme';
 import { formatWalletFingerprint } from '../../utils/cpayId';
 import { AlertManager } from '../../utils/alert';
+import { InitialAvatar } from '../InitialAvatar';
 
 interface ProfileHeaderProps {
   profilePhoto: string | null;
@@ -70,10 +71,11 @@ export const ProfileHeader: React.FC<ProfileHeaderProps> = ({
   return (
     <View style={styles.profileHeader}>
       <TouchableOpacity style={styles.profilePhotoContainer} onPress={handlePickImage}>
-        <Image
-          source={profilePhoto ? { uri: profilePhoto } : require('../../../assets/default-profile-image-cryptopay.png')}
-          style={styles.profilePhoto}
-        />
+        {profilePhoto ? (
+          <Image source={{ uri: profilePhoto }} style={styles.profilePhoto} />
+        ) : (
+          <InitialAvatar name={displayName || 'User'} id={walletAddress} size={100} style={styles.profilePhoto} />
+        )}
         <View style={styles.editIconContainer}>
           <Ionicons name="camera-outline" size={15} color={COLORS.primary} />
         </View>
@@ -141,4 +143,4 @@ const getStyles = () => createThemedStyles((COLORS) => ({
     flex: 1,
     marginRight: SPACING.sm,
   },
-}))();
+}));
