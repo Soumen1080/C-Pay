@@ -10,8 +10,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/theme';
-import { BLOCKCHAIN_CONFIG } from '../constants/theme';
+import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, createThemedStyles, useTheme } from '../constants/theme';
+import { BLOCKCHAIN_CONFIG, createThemedStyles, useTheme } from '../constants/theme';
 import { formatMoneyAmount } from '../utils/currency';
 import { PILOT_NOTICE_TEXT } from '../utils/pilot';
 import { Button } from './Button';
@@ -58,6 +58,7 @@ export const PaymentReviewSheet: React.FC<PaymentReviewSheetProps> = ({
   onConfirm,
   onCancel,
 }) => {
+  useTheme();
   const insets = useSafeAreaInsets();
   const amountNum = parseFloat(amount);
   const hasAmount = !!amount && !isNaN(amountNum) && amountNum > 0;
@@ -201,7 +202,7 @@ const DetailRow: React.FC<{
   valueColor?: string;
 }> = ({ icon, label, value, valueColor }) => (
   <View style={styles.detailRow}>
-    <Ionicons name={icon} size={18} color={COLORS.textSecondary} style={styles.detailIcon} />
+    <Ionicons name={icon} size={18} color={COLORS.textMuted} style={styles.detailIcon} />
     <Text style={styles.detailLabel}>{label}</Text>
     <Text style={[styles.detailValue, valueColor ? { color: valueColor } : null]} numberOfLines={2}>
       {value}
@@ -209,7 +210,7 @@ const DetailRow: React.FC<{
   </View>
 );
 
-const styles = StyleSheet.create({
+const styles = createThemedStyles((COLORS) => ({
   backdrop: {
     flex: 1,
     backgroundColor: COLORS.overlay,
@@ -269,7 +270,7 @@ const styles = StyleSheet.create({
   identityLabel: {
     fontSize: FONT_SIZES.xs,
     fontWeight: '600',
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
     marginBottom: 2,
@@ -281,7 +282,7 @@ const styles = StyleSheet.create({
   },
   identityId: {
     fontSize: FONT_SIZES.sm,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     marginTop: 2,
   },
@@ -292,7 +293,7 @@ const styles = StyleSheet.create({
   },
   amountLabel: {
     fontSize: FONT_SIZES.sm,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
     marginBottom: SPACING.xs,
   },
   amountValue: {
@@ -316,7 +317,7 @@ const styles = StyleSheet.create({
   },
   detailLabel: {
     fontSize: FONT_SIZES.md,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
   },
   detailValue: {
     flex: 1,
@@ -343,7 +344,7 @@ const styles = StyleSheet.create({
   noticeText: {
     flex: 1,
     fontSize: FONT_SIZES.sm,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
     lineHeight: 19,
   },
   actions: {
@@ -358,4 +359,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: SPACING.sm,
   },
-});
+}));

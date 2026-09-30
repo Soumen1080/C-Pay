@@ -12,3 +12,5 @@ export { PaymentReviewSheet } from './PaymentReviewSheet';
 export type { PaymentReviewSheetProps } from './PaymentReviewSheet';
 // Reusable layout primitives (screen/component design system)
 export * from './layout';
+
+export * from './InitialAvatar';

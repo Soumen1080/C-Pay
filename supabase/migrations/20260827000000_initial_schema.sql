@@ -118,7 +118,6 @@ CREATE TABLE IF NOT EXISTS merchant_qr_codes (
 CREATE TABLE IF NOT EXISTS add_money_claims (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     wallet_address TEXT NOT NULL,
-    auth_user_id TEXT,
     amount NUMERIC(20, 7) NOT NULL CHECK (amount > 0),
     asset_code TEXT NOT NULL DEFAULT 'CPINR',
     asset_issuer TEXT,
@@ -225,7 +224,6 @@ CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_a
 CREATE INDEX IF NOT EXISTS idx_transactions_merchant_id ON transactions(merchant_id);
 CREATE INDEX IF NOT EXISTS idx_merchant_qr_codes_merchant_id ON merchant_qr_codes(merchant_id);
 CREATE INDEX IF NOT EXISTS idx_add_money_claims_wallet_address ON add_money_claims(wallet_address);
-CREATE INDEX IF NOT EXISTS idx_add_money_claims_auth_user_id ON add_money_claims(auth_user_id);
 CREATE INDEX IF NOT EXISTS idx_add_money_claims_claimed_at ON add_money_claims(claimed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_relayer_idempotency_expires_at ON relayer_idempotency_keys(expires_at);
 CREATE INDEX IF NOT EXISTS idx_contract_intent_cache_expires_at ON contract_intent_cache(expires_at);
@@ -499,27 +497,33 @@ USING (
   )
 );
 
--- The transactions table is the payments ledger. It must never be writable by
--- the accounts it describes: a participant who can INSERT can forge a receipt
--- ("I received ₹50,000, status success") and, because refresh_merchant_totals()
--- sums this same table, forge merchant revenue as well. Writes are service_role
--- only (relayer / Horizon ingest worker); clients get SELECT only.
 DROP POLICY IF EXISTS "transactions_insert" ON transactions;
 DROP POLICY IF EXISTS "transactions_insert_participant" ON transactions;
+CREATE POLICY "transactions_insert_participant" ON transactions
+FOR INSERT
+WITH CHECK (
+  auth.uid() IS NOT NULL AND (
+    from_address = current_wallet_address()
+    OR to_address = current_wallet_address()
+  )
+);
+
 DROP POLICY IF EXISTS "transactions_update" ON transactions;
 DROP POLICY IF EXISTS "transactions_update_participant" ON transactions;
-DROP POLICY IF EXISTS "transactions_delete_participant" ON transactions;
-DROP POLICY IF EXISTS "transactions_all_participant" ON transactions;
-
-DROP POLICY IF EXISTS "transactions_service_all" ON transactions;
-CREATE POLICY "transactions_service_all" ON transactions
-FOR ALL
-USING (auth.jwt() ->> 'role' = 'service_role')
-WITH CHECK (auth.jwt() ->> 'role' = 'service_role');
-
-REVOKE INSERT, UPDATE, DELETE ON transactions FROM anon, authenticated;
-GRANT SELECT ON transactions TO authenticated;
-GRANT ALL ON transactions TO service_role;
+CREATE POLICY "transactions_update_participant" ON transactions
+FOR UPDATE
+USING (
+  auth.uid() IS NOT NULL AND (
+    from_address = current_wallet_address()
+    OR to_address = current_wallet_address()
+  )
+)
+WITH CHECK (
+  auth.uid() IS NOT NULL AND (
+    from_address = current_wallet_address()
+    OR to_address = current_wallet_address()
+  )
+);
 
 DROP POLICY IF EXISTS "merchant_qr_codes_select" ON merchant_qr_codes;
 DROP POLICY IF EXISTS "merchant_qr_codes_select_own" ON merchant_qr_codes;
@@ -686,36 +690,3 @@ DROP TRIGGER IF EXISTS update_merchant_totals_on_transactions ON transactions;
 CREATE TRIGGER update_merchant_totals_on_transactions
 AFTER INSERT OR UPDATE OR DELETE ON transactions
 FOR EACH ROW EXECUTE FUNCTION update_merchant_totals_from_transaction();
-
--- Wallet Bindings Table for Server-Side Resolution
-
--- Migration: wallet_bindings
-
-CREATE TABLE IF NOT EXISTS wallet_bindings (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    auth_user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-    wallet_address TEXT NOT NULL,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(auth_user_id, wallet_address)
-);
-
--- Backfill from users table
-INSERT INTO wallet_bindings (auth_user_id, wallet_address)
-SELECT auth_user_id, wallet_address
-FROM users
-WHERE auth_user_id IS NOT NULL AND wallet_address IS NOT NULL
-ON CONFLICT DO NOTHING;
-
--- RLS
-ALTER TABLE wallet_bindings ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "wallet_bindings_select_own" ON wallet_bindings 
-FOR SELECT USING (auth_user_id = auth.uid());
-
-CREATE POLICY "wallet_bindings_insert_own" ON wallet_bindings 
-FOR INSERT WITH CHECK (auth_user_id = auth.uid());
-
-CREATE POLICY "wallet_bindings_update_own" ON wallet_bindings 
-FOR UPDATE USING (auth_user_id = auth.uid());
-
