@@ -1,4 +1,6 @@
 import React, { useEffect, useRef } from 'react';
+
+// Payment failure screen: explains routing and retry steps after an error.
 import {
   View,
   Text,
@@ -9,7 +11,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/theme';
+import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS, createThemedStyles, useTheme } from '../constants/theme';
 import { formatMoneyAmount } from '../utils/currency';
 
 const { width } = Dimensions.get('window');
@@ -36,6 +38,7 @@ export const PaymentFailureScreen: React.FC<PaymentFailureScreenProps> = ({
   navigation,
   route,
 }) => {
+  useTheme();
   const {
     amount,
     recipientName,
@@ -153,7 +156,7 @@ export const PaymentFailureScreen: React.FC<PaymentFailureScreenProps> = ({
   return (
     <View style={styles.container}>
       <LinearGradient
-        colors={['#FF5C5C', '#E85050', '#D32F2F']}
+        colors={COLORS.errorGradient}
         style={styles.gradient}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
@@ -209,7 +212,7 @@ export const PaymentFailureScreen: React.FC<PaymentFailureScreenProps> = ({
 
             {/* Transaction Details */}
             <LinearGradient
-              colors={['#FFFFFF', '#F8F9FA']}
+              colors={[COLORS.surfaceElevated, COLORS.background]}
               style={styles.summaryCard}
               start={{ x: 0, y: 0 }}
               end={{ x: 0, y: 1 }}
@@ -309,7 +312,7 @@ export const PaymentFailureScreen: React.FC<PaymentFailureScreenProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
+const styles = createThemedStyles((COLORS) => ({
   container: {
     flex: 1,
   },
@@ -330,14 +333,14 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    backgroundColor: COLORS.whiteOverlayMedium,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: SPACING.md,
   },
   compactErrorIcon: {
     fontSize: 50,
-    color: '#FFFFFF',
+    color: COLORS.textInverse,
     fontWeight: '700',
   },
   compactTitle: {
@@ -349,7 +352,7 @@ const styles = StyleSheet.create({
   },
   compactSubtitle: {
     fontSize: FONT_SIZES.md,
-    color: 'rgba(255, 255, 255, 0.9)',
+    color: COLORS.textOnBrandStrong,
     fontWeight: '500',
     textAlign: 'center',
   },
@@ -362,9 +365,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.xs,
     borderRadius: BORDER_RADIUS.full,
-    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    backgroundColor: COLORS.whiteOverlayFaint,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
+    borderColor: COLORS.whiteOverlayMedium,
   },
   statusChipText: {
     fontSize: FONT_SIZES.xs,
@@ -379,12 +382,12 @@ const styles = StyleSheet.create({
   errorReasonBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    backgroundColor: COLORS.whiteOverlay,
     borderRadius: BORDER_RADIUS.lg,
     padding: SPACING.md,
     marginBottom: SPACING.lg,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
+    borderColor: COLORS.whiteOverlayMedium,
   },
   errorReasonIcon: {
     marginRight: SPACING.sm,
@@ -399,7 +402,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   errorCodeText: {
-    color: 'rgba(255, 255, 255, 0.82)',
+    color: COLORS.textOnBrandSubtle,
     fontSize: FONT_SIZES.xs,
     fontWeight: '700',
     marginTop: SPACING.xs,
@@ -407,7 +410,7 @@ const styles = StyleSheet.create({
   summaryCard: {
     borderRadius: BORDER_RADIUS.xl,
     padding: SPACING.lg,
-    shadowColor: '#000',
+    shadowColor: COLORS.shadow,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.15,
     shadowRadius: 12,
@@ -427,7 +430,7 @@ const styles = StyleSheet.create({
   },
   summaryLabel: {
     fontSize: FONT_SIZES.sm,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
     fontWeight: '500',
     flex: 1,
   },
@@ -454,10 +457,10 @@ const styles = StyleSheet.create({
     gap: SPACING.md,
   },
   tryAgainButton: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: COLORS.textInverse,
     borderRadius: BORDER_RADIUS.lg,
     paddingVertical: SPACING.md + 2,
-    shadowColor: '#000',
+    shadowColor: COLORS.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 8,
@@ -466,7 +469,7 @@ const styles = StyleSheet.create({
   tryAgainButtonText: {
     fontSize: FONT_SIZES.lg,
     fontWeight: '700',
-    color: '#D32F2F',
+    color: COLORS.errorDark,
     textAlign: 'center',
   },
   secondaryButtonsRow: {
@@ -475,11 +478,11 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     flex: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    backgroundColor: COLORS.whiteOverlayQuarter,
     borderRadius: BORDER_RADIUS.lg,
     paddingVertical: SPACING.md,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
+    borderColor: COLORS.whiteOverlayMedium,
   },
   secondaryButtonText: {
     fontSize: FONT_SIZES.md,
@@ -487,4 +490,4 @@ const styles = StyleSheet.create({
     color: COLORS.textInverse,
     textAlign: 'center',
   },
-});
+}));

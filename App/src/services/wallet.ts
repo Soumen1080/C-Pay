@@ -1,3 +1,4 @@
+import { Logger } from '../utils/logger';
 /**
  * @file wallet.ts
  * @description Local Stellar wallet: key generation, PIN-based encryption,
@@ -398,7 +399,7 @@ export async function getWallet(pin: string): Promise<GetWalletResult> {
     const wallet = cacheWalletForSession(secret);
     return { success: true, wallet };
   } catch (error) {
-    console.error('Error getting wallet:', error);
+    Logger.error('Error getting wallet:', error);
     return { success: false, wallet: null, error: 'STORAGE_ERROR', rawError: error };
   }
 }
@@ -417,7 +418,7 @@ export async function hasWallet(): Promise<boolean> {
     const pin = await SecureStore.getItemAsync(PIN_KEY);
     return !!wallet && !!pin;
   } catch (error) {
-    console.error('Error checking wallet:', error);
+    Logger.error('Error checking wallet:', error);
     return false;
   }
 }
@@ -457,7 +458,7 @@ export async function verifyPin(pin: string, options: VerifyPinOptions = {}): Pr
           await migration;
         } else {
           void migration.catch((error) => {
-            console.warn('PIN verifier migration failed:', error);
+// [SECURITY] Removed sensitive log: console.warn('PIN verifier migration failed:', error);
           });
         }
       }
@@ -466,7 +467,7 @@ export async function verifyPin(pin: string, options: VerifyPinOptions = {}): Pr
 
     return { success: false, error: 'INVALID_PIN' };
   } catch (error) {
-    console.error('Error verifying PIN:', error);
+// [SECURITY] Removed sensitive log: console.error('Error verifying PIN:', error);
     return { success: false, error: 'STORAGE_ERROR', rawError: error };
   }
 }
@@ -671,12 +672,12 @@ async function readSecretAt(pin: string, keyName: string): Promise<string | null
       // verified PIN. Best-effort and non-blocking — a failure here must never
       // prevent an otherwise valid unlock, since the existing blob still works.
       void maybeRewrapWalletSecret(secret, pin, payload, keyName).catch((error) => {
-        console.warn('Wallet KDF re-wrap failed; keeping existing blob:', error);
+// [SECURITY] Removed sensitive log: console.warn('Wallet KDF re-wrap failed; keeping existing blob:', error);
       });
       return secret;
     }
   } catch (error) {
-    console.error('Wallet decrypt failed:', error);
+    Logger.error('Wallet decrypt failed:', error);
     return null;
   }
 
@@ -705,7 +706,7 @@ async function storeBiometricBackup(
     await SecureStore.setItemAsync(BIOMETRIC_BACKUP_AVAILABLE_KEY, 'true');
     return true;
   } catch (error) {
-    console.warn('Biometric backup could not be stored:', error);
+    Logger.warn('Biometric backup could not be stored:', error);
     await SecureStore.deleteItemAsync(BIOMETRIC_BACKUP_AVAILABLE_KEY);
     return false;
   }
@@ -740,7 +741,7 @@ export async function clearWallet(): Promise<void> {
     cachedPinHash = null;
     clearSessionPin();
   } catch (error) {
-    console.error('Error clearing wallet:', error);
+    Logger.error('Error clearing wallet:', error);
   }
 }
 

@@ -105,7 +105,7 @@ describe('Server-Authoritative Transactions (#10)', () => {
       to: 'GCRECEIVER_WALLET',
       amount: '45.5000000',
       asset_type: 'credit_alphanum4',
-      asset_code: 'CPINR',
+      asset_code: 'USDC',
       created_at: '2026-08-29T10:00:00Z',
     };
 

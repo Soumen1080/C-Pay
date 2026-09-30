@@ -1,4 +1,6 @@
 import React, { useRef, useState } from 'react';
+
+// Create PIN screen: first step in wallet security setup.
 import {
   View,
   Text,
@@ -8,7 +10,7 @@ import {
 import { PINInput } from '../components/PINInput';
 import { OnboardingProgress } from '../components/OnboardingProgress';
 import { Screen } from '../components';
-import { COLORS, SPACING, TYPOGRAPHY } from '../constants/theme';
+import { COLORS, SPACING, TYPOGRAPHY, createThemedStyles, useTheme } from '../constants/theme';
 
 const FONT_SIZES = TYPOGRAPHY.sizes;
 
@@ -18,6 +20,7 @@ interface CreatePINScreenProps {
 }
 
 export const CreatePINScreen: React.FC<CreatePINScreenProps> = ({ navigation, route }) => {
+  useTheme();
   const { phoneNumber } = route.params || {};
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
@@ -81,7 +84,7 @@ export const CreatePINScreen: React.FC<CreatePINScreenProps> = ({ navigation, ro
   );
 };
 
-const styles = StyleSheet.create({
+const styles = createThemedStyles((COLORS) => ({
   content: {
     flexGrow: 1,
     paddingHorizontal: SPACING.lg,
@@ -107,7 +110,7 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: FONT_SIZES.md,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
     textAlign: 'center',
   },
   pinSection: {
@@ -129,8 +132,8 @@ const styles = StyleSheet.create({
   },
   infoText: {
     fontSize: FONT_SIZES.sm,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
     marginBottom: SPACING.sm,
     lineHeight: 19,
   },
-});
+}));

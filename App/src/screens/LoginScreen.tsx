@@ -1,4 +1,7 @@
+import { Logger } from '../utils/logger';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+
+// Login screen: secure wallet access via PIN or biometric unlock.
 import {
   View,
   Text,
@@ -30,7 +33,7 @@ import {
   WIPE_PIN_ATTEMPTS,
 } from '../services/wallet';
 import { isBiometricAvailable, getBiometricType } from '../utils/biometric';
-import { COLORS, SPACING, TYPOGRAPHY, BORDER_RADIUS } from '../constants/theme';
+import { COLORS, SPACING, TYPOGRAPHY, BORDER_RADIUS, createThemedStyles, useTheme } from '../constants/theme';
 import { AlertManager } from '../utils/alert';
 
 const FONT_SIZES = TYPOGRAPHY.sizes;
@@ -48,6 +51,7 @@ function formatCountdown(ms: number): string {
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
+  useTheme();
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -145,7 +149,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
         AlertManager.alert('Authentication Failed', 'Please use your PIN to unlock this wallet.');
       }
     } catch (err) {
-      console.error('Biometric auth error:', err);
+// [SECURITY] Removed sensitive log: console.error('Biometric auth error:', err);
       AlertManager.alert('Authentication Failed', 'Please use your PIN to unlock this wallet.');
     }
   };
@@ -331,7 +335,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const styles = createThemedStyles((COLORS) => ({
   header: {
     alignItems: 'center',
     marginTop: SPACING.xxl,
@@ -351,7 +355,7 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: FONT_SIZES.md,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
   },
   pinSection: {
     marginBottom: SPACING.xl,
@@ -364,7 +368,7 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: FONT_SIZES.sm,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
     marginLeft: SPACING.sm,
   },
   lockoutBanner: {
@@ -466,4 +470,4 @@ const styles = StyleSheet.create({
     color: COLORS.primary,
     fontWeight: '500',
   },
-});
+}));

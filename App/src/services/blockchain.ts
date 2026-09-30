@@ -52,8 +52,15 @@ const NETWORK_PASSPHRASE = getEnvVar(
   'EXPO_PUBLIC_STELLAR_NETWORK_PASSPHRASE',
   StellarSdk.Networks.TESTNET
 );
-const CPINR_ASSET_CODE = getEnvVar('EXPO_PUBLIC_CPINR_ASSET_CODE', 'CPINR');
-const CPINR_ASSET_ISSUER = getEnvVar('EXPO_PUBLIC_CPINR_ASSET_ISSUER', '');
+const USDC_ISSUERS = {
+  testnet: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
+  public: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+} as const;
+const USDC_ASSET_CODE = 'USDC';
+const USDC_ASSET_ISSUER = getEnvVar(
+  'EXPO_PUBLIC_USDC_ASSET_ISSUER',
+  STELLAR_NETWORK === 'public' ? USDC_ISSUERS.public : USDC_ISSUERS.testnet,
+);
 const RELAYER_URL = resolveRelayerUrl();
 const BASE_FEE = getEnvVar('EXPO_PUBLIC_STELLAR_BASE_FEE', StellarSdk.BASE_FEE);
 const RELAYER_TIMEOUT_MS = 60000;
@@ -123,8 +130,8 @@ export function getNetworkConfig() {
     network: STELLAR_NETWORK,
     horizonUrl: HORIZON_URL,
     networkPassphrase: NETWORK_PASSPHRASE,
-    assetCode: CPINR_ASSET_CODE,
-    assetIssuer: CPINR_ASSET_ISSUER,
+    assetCode: USDC_ASSET_CODE,
+    assetIssuer: USDC_ASSET_ISSUER,
     relayerUrl: RELAYER_URL,
   };
 }
@@ -133,12 +140,13 @@ export function isValidAccountId(accountId: string): boolean {
   return StellarSdk.StrKey.isValidEd25519PublicKey(accountId || '');
 }
 
-export function getCpinrAsset(): StellarSdk.Asset {
-  if (!CPINR_ASSET_ISSUER) {
-    throw new Error('CPINR asset issuer is not configured');
+export function getUsdcAsset(): StellarSdk.Asset {
+  const expectedIssuer = STELLAR_NETWORK === 'public' ? USDC_ISSUERS.public : USDC_ISSUERS.testnet;
+  if (USDC_ASSET_ISSUER !== expectedIssuer) {
+    throw new Error(`USDC issuer does not match Circle's ${STELLAR_NETWORK} issuer`);
   }
 
-  return new StellarSdk.Asset(CPINR_ASSET_CODE, CPINR_ASSET_ISSUER);
+  return new StellarSdk.Asset(USDC_ASSET_CODE, USDC_ASSET_ISSUER);
 }
 
 export async function getBalance(accountId: string): Promise<string> {
@@ -151,16 +159,16 @@ export async function getBalance(accountId: string): Promise<string> {
       balance: string;
     }>(`/account/${accountId}/balance`);
 
-    return Number(relayerBalance.balance || '0').toFixed(2);
+    return Number(relayerBalance.balance || '0').toFixed(7);
   } catch {
     try {
       const account = await loadHorizonAccount(accountId);
       const balance = account.balances.find(item =>
-        item.asset_code === CPINR_ASSET_CODE &&
-        item.asset_issuer === CPINR_ASSET_ISSUER
+        item.asset_code === USDC_ASSET_CODE &&
+        item.asset_issuer === USDC_ASSET_ISSUER
       );
 
-      return Number(balance?.balance || '0').toFixed(2);
+      return Number(balance?.balance || '0').toFixed(7);
     } catch {
       return '0.00';
     }
@@ -285,7 +293,7 @@ export async function sendPayment(
   })
     .addOperation(StellarSdk.Operation.payment({
       destination,
-      asset: getCpinrAsset(),
+      asset: getUsdcAsset(),
       amount: normalizedAmount,
     }))
     .setTimeout(60)
@@ -429,7 +437,7 @@ async function horizonRequest<T = any>(path: string): Promise<T> {
   return body as T;
 }
 
-async function relayerRequest<T = any>(
+export async function relayerRequest<T = any>(
   path: string,
   options: RequestInit = {},
   timeoutMs: number = RELAYER_TIMEOUT_MS
