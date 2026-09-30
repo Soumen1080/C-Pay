@@ -197,6 +197,14 @@ const buildFailureCopy = (error: any): Omit<PaymentFailureCopy, 'category'> => {
     };
   }
 
+  if (errorCode === 'FX_RATE_UNAVAILABLE') {
+    return {
+      errorMessage: 'Exchange Rate Unavailable',
+      errorReason: `The exchange rate service is temporarily unavailable. ${safeNoDeductionText} Please try again in a few moments.`,
+      errorCode,
+    };
+  }
+
   if (errorCode === 'PAYMENT_AMOUNT_EXCEEDED') {
     return {
       errorMessage: 'Amount Exceeds Limit',
