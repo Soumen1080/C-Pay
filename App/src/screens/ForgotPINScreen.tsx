@@ -1,4 +1,7 @@
+import { Logger } from '../utils/logger';
 import React, { useState, useEffect } from 'react';
+
+// Forgot PIN screen: recovery path for users locked out of their wallet.
 import {
   View,
   Text,
@@ -17,7 +20,7 @@ import {
 import { isBiometricAvailable, getBiometricType } from '../utils/biometric';
 import { PINInput } from '../components/PINInput';
 import { Screen } from '../components';
-import { COLORS, SPACING, TYPOGRAPHY } from '../constants/theme';
+import { COLORS, SPACING, TYPOGRAPHY, createThemedStyles, useTheme } from '../constants/theme';
 import { AlertManager } from '../utils/alert';
 import { formatWalletFingerprint, generateCPayId } from '../utils/cpayId';
 
@@ -28,6 +31,7 @@ interface ForgotPINScreenProps {
 }
 
 export const ForgotPINScreen: React.FC<ForgotPINScreenProps> = ({ navigation }) => {
+  useTheme();
   const [loading, setLoading] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [biometricType, setBiometricType] = useState('Biometric');
@@ -66,7 +70,7 @@ export const ForgotPINScreen: React.FC<ForgotPINScreenProps> = ({ navigation }) 
         );
       }
     } catch (error) {
-      console.error('Error checking availability:', error);
+      Logger.error('Error checking availability:', error);
     }
   };
 
@@ -94,7 +98,7 @@ export const ForgotPINScreen: React.FC<ForgotPINScreenProps> = ({ navigation }) 
         [{ text: 'OK' }]
       );
     } catch (error: any) {
-      console.error('Recovery error:', error);
+      Logger.error('Recovery error:', error);
       
       if (error.message?.includes('cancel')) {
         AlertManager.alert('Cancelled', 'Recovery was cancelled');
@@ -169,7 +173,7 @@ export const ForgotPINScreen: React.FC<ForgotPINScreenProps> = ({ navigation }) 
           ]
         );
       } catch (error: any) {
-        console.error('PIN reset error:', error);
+// [SECURITY] Removed sensitive log: console.error('PIN reset error:', error);
         AlertManager.alert('Error', 'Failed to reset PIN. Please try again.');
         setStep('new-pin');
         setNewPin('');
@@ -299,7 +303,7 @@ export const ForgotPINScreen: React.FC<ForgotPINScreenProps> = ({ navigation }) 
           disabled={loading || !biometricAvailable || !hasBackup}
         >
           {loading ? (
-            <ActivityIndicator size="small" color="#fff" />
+            <ActivityIndicator size="small" color={COLORS.textInverse} />
           ) : (
             <>
               <Ionicons name={getBiometricIcon() as any} size={22} color={COLORS.textInverse} style={styles.buttonIcon} />
@@ -321,7 +325,7 @@ export const ForgotPINScreen: React.FC<ForgotPINScreenProps> = ({ navigation }) 
   );
 };
 
-const styles = StyleSheet.create({
+const styles = createThemedStyles((COLORS) => ({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,
@@ -363,7 +367,7 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: FONT_SIZES.md,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
     textAlign: 'center',
     paddingHorizontal: SPACING.md,
   },
@@ -381,18 +385,18 @@ const styles = StyleSheet.create({
   },
   infoText: {
     fontSize: FONT_SIZES.sm,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
     marginBottom: SPACING.sm,
     paddingLeft: SPACING.sm,
   },
   warningBox: {
     flexDirection: 'row',
-    backgroundColor: '#fff3cd',
+    backgroundColor: COLORS.warningBg,
     padding: SPACING.md,
     borderRadius: 8,
     marginBottom: SPACING.xl,
     borderWidth: 1,
-    borderColor: '#ffc107',
+    borderColor: COLORS.warning,
   },
   warningIcon: {
     marginRight: SPACING.sm,
@@ -400,7 +404,7 @@ const styles = StyleSheet.create({
   warningText: {
     flex: 1,
     fontSize: FONT_SIZES.sm,
-    color: '#856404',
+    color: COLORS.warningDark,
   },
   button: {
     flexDirection: 'row',
@@ -419,7 +423,7 @@ const styles = StyleSheet.create({
     marginRight: SPACING.sm,
   },
   buttonText: {
-    color: '#fff',
+    color: COLORS.textInverse,
     fontSize: FONT_SIZES.md,
     fontWeight: '600',
   },
@@ -429,7 +433,7 @@ const styles = StyleSheet.create({
   },
   cancelButtonText: {
     fontSize: FONT_SIZES.md,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
   },
   pinSection: {
     alignItems: 'center',
@@ -442,6 +446,6 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: SPACING.sm,
     fontSize: FONT_SIZES.sm,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
   },
-});
+}));

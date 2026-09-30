@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { NavigationContainer } from '@react-navigation/native';
+import { DarkTheme, DefaultTheme, NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -26,7 +26,7 @@ import { PaymentSuccessScreen } from '../screens/PaymentSuccessScreen';
 import { PaymentFailureScreen } from '../screens/PaymentFailureScreen';
 import { SecurityCenterScreen } from '../screens/SecurityCenterScreen';
 import { InfoScreen, type InfoDoc } from '../screens/InfoScreen';
-import { COLORS, SPACING } from '../constants/theme';
+import { COLORS, SPACING, createThemedStyles, useTheme } from '../constants/theme';
 
 type RootStackParamList = {
   Splash: undefined;
@@ -89,15 +89,15 @@ const MainTabs = () => {
       screenOptions={({ route }) => ({
         headerShown: true,
         tabBarActiveTintColor: COLORS.primary,
-        tabBarInactiveTintColor: '#9ca3af',
+        tabBarInactiveTintColor: COLORS.textTertiary,
         tabBarHideOnKeyboard: true,
         tabBarStyle: {
           borderTopWidth: 1,
-          borderTopColor: '#e5e7eb',
+          borderTopColor: COLORS.borderLight,
           paddingTop: SPACING.xs,
           paddingBottom: bottomPadding,
           height: tabBarHeight,
-          backgroundColor: '#ffffff',
+          backgroundColor: COLORS.surface,
         },
         tabBarItemStyle: styles.tabBarItem,
         tabBarLabelStyle: styles.tabBarLabel,
@@ -131,8 +131,23 @@ const MainTabs = () => {
 };
 
 export const Navigation = () => {
+  const { colors, isDark } = useTheme();
+  const baseTheme = isDark ? DarkTheme : DefaultTheme;
+  const navigationTheme = {
+    ...baseTheme,
+    colors: {
+      ...baseTheme.colors,
+      primary: colors.primary,
+      background: colors.background,
+      card: colors.surfaceElevated,
+      text: colors.textPrimary,
+      border: colors.border,
+      notification: colors.error,
+    },
+  };
+
   return (
-    <NavigationContainer linking={linking}>
+    <NavigationContainer linking={linking} theme={navigationTheme}>
       <Stack.Navigator
         screenOptions={{
           headerShown: false,
@@ -217,7 +232,7 @@ export const Navigation = () => {
   );
 };
 
-const styles = StyleSheet.create({
+const styles = createThemedStyles((COLORS) => ({
   tabBarItem: {
     justifyContent: 'center',
     minWidth: 64,
@@ -239,7 +254,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
+    shadowColor: COLORS.shadow,
     shadowOffset: {
       width: 0,
       height: 4,
@@ -252,4 +267,4 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primaryDark,
     transform: [{ scale: 1.1 }],
   },
-});
+}));

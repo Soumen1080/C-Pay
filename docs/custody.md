@@ -1,14 +1,16 @@
-# C-Pay Key Custody & Key Management Plan
+# Key custody
 
-> **Classification:** Confidential / Security Architecture  
-> **Status:** Production-Ready (Phase 2 Deliverable — Issue #58)  
-> **Scope:** Stellar Relayer Sponsor, Distribution, Asset Issuer, and Contract Admin Keys
+C-Pay does not issue or custody the USDC asset. Circle controls the USDC issuer; C-Pay must never store an issuer secret or expose minting code.
 
----
+## Keys operated by C-Pay
 
-## 1. Executive Summary & Threat Model
+| Account | Purpose | Recommended control |
+| --- | --- | --- |
+| Sponsor | Creates accounts and pays sponsored reserves and fees | Isolated secret store, least-privilege service access, rotation runbook |
+| Distribution | Holds testnet USDC used for pilot distribution | Separate secret store, low-balance monitoring, strict inventory limits |
+| User | Signs user payments | Encrypted user-controlled wallet backup; never sent to the relayer |
 
-The C-Pay relayer functions as a non-custodial transaction sponsor and on-demand liquidity distributor. In production environments, holding raw secret keys in plaintext `.env` files on a single host poses severe security risks:
+Production money-in must come from a licensed on-ramp partner. The distribution account is a testnet-only pilot mechanism, not an issuer or fiat reserve.
 
 1. **Host Compromise / Server Breach**: Exfiltration of `.env` leads to total loss of sponsor funds and distribution liquidity.
 2. **Insider Threat & Operator Mistake**: Accidental logging, accidental commits, or shared credentials.
@@ -172,7 +174,7 @@ await server.submitTransaction(removeOldSignerTx);
 ### 7.2 Anomaly & Velocity Detection
 - **Signing Velocity Threshold**: Triggered if `KeyManager` exceeds 120 signatures/minute (`MAX_SIGNS_PER_MINUTE`).
 - **Unexpected Source Account Check**: Relayer enforces `requireWalletOwnership()` on every request to prevent signing for unauthorized accounts.
-- **Circuit Breaker**: If unauthorized signing velocity is detected, the relayer automatically sets `ENABLE_ADD_MONEY=false` and notifies operators.
+- **Circuit Breaker**: Keep the legacy testnet faucet disabled (`ENABLE_TESTNET_FAUCET=false`) and revoke the distribution key if unauthorized signing is detected.
 
 ---
 

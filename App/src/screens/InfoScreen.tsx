@@ -1,6 +1,8 @@
 import React from 'react';
+
+// Info screen: educational and support details for wallet users.
 import { View, Text, StyleSheet, Linking } from 'react-native';
-import { COLORS, SPACING, FONT_SIZES } from '../constants/theme';
+import { COLORS, SPACING, FONT_SIZES, createThemedStyles, useTheme } from '../constants/theme';
 import { Screen, Header, Button, InfoBanner } from '../components';
 import { AlertManager } from '../utils/alert';
 
@@ -68,6 +70,7 @@ const CONTENT: Record<InfoDoc, { title: string; blocks: Block[] }> = {
 };
 
 export const InfoScreen: React.FC<InfoScreenProps> = ({ navigation, route }) => {
+  useTheme();
   const doc = route.params?.doc || 'about';
   const { title, blocks } = CONTENT[doc];
 
@@ -116,7 +119,7 @@ export const InfoScreen: React.FC<InfoScreenProps> = ({ navigation, route }) => 
   );
 };
 
-const styles = StyleSheet.create({
+const styles = createThemedStyles((COLORS) => ({
   heading: {
     fontSize: FONT_SIZES.lg,
     fontWeight: '700',
@@ -126,7 +129,7 @@ const styles = StyleSheet.create({
   },
   paragraph: {
     fontSize: FONT_SIZES.md,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
     lineHeight: 22,
     marginBottom: SPACING.sm,
   },
@@ -136,4 +139,4 @@ const styles = StyleSheet.create({
   note: {
     marginTop: SPACING.xl,
   },
-});
+}));

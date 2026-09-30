@@ -86,7 +86,7 @@ describe('blockchain.ts idempotency key behavior (#33)', () => {
         text: async () => JSON.stringify({
           id: mockWallet.publicKey,
           sequence: '100',
-          balances: [{ asset_type: 'credit_alphanum4', asset_code: 'CPINR', balance: '500.00' }],
+          balances: [{ asset_type: 'credit_alphanum4', asset_code: 'USDC', balance: '500.0000000' }],
         }),
       });
       // 3. /payments/submit
