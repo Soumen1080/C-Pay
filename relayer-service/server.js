@@ -90,8 +90,7 @@ app.get('/', (_req, res) => {
     health: '/health',
     endpoints: [
       'GET /health',
-      'POST /quotes',
-      'POST /quotes/validate',
+      'GET /health/detailed',
       'GET /account/:accountId/status',
       'GET /account/:accountId/balance',
       'POST /accounts/prepare',
@@ -166,7 +165,6 @@ app.get('/health/detailed', requireAuthenticatedUser, async (_req, res) => {
     authApiConfigured: Boolean(config.supabaseUrl && config.supabaseServiceRoleKey),
     legacyJwtSecretConfigured: Boolean(config.supabaseJwtSecret),
     supabasePersistenceEnabled: isSupabasePersistenceEnabled(),
-    qrSigningConfigured: Boolean(config.qrSigningSecret),
     ingest: ingestWorker.getHealth(),
     lowXlm,
     lowAsset,
@@ -727,9 +725,6 @@ function loadConfig() {
     supabaseUrl,
     supabaseServiceRoleKey,
     addMoneyEnabled,
-    // QR signing – optional but recommended for production
-    qrSigningSecret: process.env.QR_SIGNING_SECRET || '',
-    qrDefaultTtlSeconds: Number(process.env.QR_DEFAULT_TTL_SECONDS || 86400),
     // Ledger Ingest worker
     ledgerIngestEnabled: readBooleanEnv('LEDGER_INGEST_ENABLED', true),
     ingestPollIntervalMs: Number(process.env.INGEST_POLL_INTERVAL_MS || 5000),
@@ -761,49 +756,6 @@ function readBooleanEnv(name, defaultValue) {
   }
 
   return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
-}
-
-/**
- * Sign a v3 QR payload using HMAC-SHA256.
- *
- * The signature is over the canonical JSON representation of all fields
- * except `sig` itself.  This determin istic order prevents signature
- * mismatches from field reordering.
- */
-function signQRPayload(unsignedPayload) {
-  // Build the canonical payload with fields in sorted order, excluding `sig`.
-  const canonical = {
-    type: unsignedPayload.type,
-    version: unsignedPayload.version,
-    requestId: unsignedPayload.requestId,
-    nonce: unsignedPayload.nonce,
-    network: unsignedPayload.network,
-    merchantId: unsignedPayload.merchantId,
-    merchant: unsignedPayload.merchant,
-    assetCode: unsignedPayload.assetCode,
-    assetIssuer: unsignedPayload.assetIssuer,
-    amount: unsignedPayload.amount,
-    name: unsignedPayload.name,
-    ...(unsignedPayload.note ? { note: unsignedPayload.note } : {}),
-    issuedAt: unsignedPayload.issuedAt,
-    expiresAt: unsignedPayload.expiresAt,
-  };
-
-  const canonicalString = JSON.stringify(canonical);
-  const hmac = crypto.createHmac('sha256', config.qrSigningSecret);
-  hmac.update(canonicalString);
-  return hmac.digest('hex');
-}
-
-/**
- * Timing-safe comparison of two hex strings.
- * Prevents timing attacks on signature verification.
- */
-function timingSafeEqual(a, b) {
-  const aBuf = Buffer.from(a, 'hex');
-  const bBuf = Buffer.from(b, 'hex');
-  if (aBuf.length !== bBuf.length) return false;
-  return crypto.timingSafeEqual(aBuf, bBuf);
 }
 
 function requireEnv(name) {
@@ -1265,34 +1217,39 @@ async function getAccountStatus(accountId) {
   }
 }
 
-async function acquireAddMoneyUserLock(userLockKey, ttlMs) {
-  if (!isSupabasePersistenceEnabled()) {
-    throw createAddMoneyPersistenceError(
-      new Error('Supabase persistence is not configured'),
-      'lock acquisition'
-    );
-  }
+const activeAddMoneyUserLocks = Object.create(null);
 
-  try {
-    await supabaseRestRequest('relayer_idempotency_keys', {
-      method: 'POST',
-      headers: { Prefer: 'return=minimal' },
-      body: JSON.stringify({
-        key: userLockKey,
-        response: null,
-        expires_at: new Date(Date.now() + ttlMs).toISOString(),
-      }),
-    });
-    return { acquired: true };
-  } catch (error) {
-    if (isPostgresUniqueViolation(error)) {
-      return { acquired: false };
+async function acquireAddMoneyUserLock(userLockKey, ttlMs) {
+  const now = Date.now();
+  const existingExpiry = activeAddMoneyUserLocks[userLockKey];
+  if (existingExpiry && existingExpiry > now) {
+    return { acquired: false };
+  }
+  activeAddMoneyUserLocks[userLockKey] = now + ttlMs;
+
+  if (isSupabasePersistenceEnabled()) {
+    try {
+      await supabaseRestRequest('relayer_idempotency_keys', {
+        method: 'POST',
+        headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify({
+          key: userLockKey,
+          response: null,
+          expires_at: new Date(now + ttlMs).toISOString(),
+        }),
+      });
+    } catch (error) {
+      if (error?.message?.includes('409') || error?.status === 409 || error?.response?.status === 409) {
+        delete activeAddMoneyUserLocks[userLockKey];
+        return { acquired: false };
+      }
     }
     throw createAddMoneyPersistenceError(error, 'lock acquisition');
   }
 }
 
 async function releaseAddMoneyUserLock(userLockKey) {
+  delete activeAddMoneyUserLocks[userLockKey];
   if (isSupabasePersistenceEnabled()) {
     try {
       const query = new URLSearchParams({ key: `eq.${userLockKey}` });
