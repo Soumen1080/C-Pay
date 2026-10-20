@@ -18,6 +18,7 @@ import { supabase } from '../services/supabase';
 import { COLORS, SPACING, TYPOGRAPHY, createThemedStyles, useTheme } from '../constants/theme';
 import { AlertManager } from '../utils/alert';
 import { generateCPayId } from '../utils/cpayId';
+import { WALLET_AUTH_USER_ID_KEY } from '../services/auth';
 
 const FONT_SIZES = TYPOGRAPHY.sizes;
 
@@ -101,12 +102,17 @@ export const ConfirmPINScreen: React.FC<ConfirmPINScreenProps> = ({
 
       // Save wallet address locally for profile and optional biometric setup.
       const verifiedEmail = await AsyncStorage.getItem('user_email');
+      const { data: userData } = await supabase.auth.getUser();
       const cpayId = generateCPayId(verifiedEmail || '', walletAddress);
-      await Promise.all([
+      const localWrites: Promise<void>[] = [
         AsyncStorage.setItem('wallet_address', walletAddress),
         AsyncStorage.setItem('cpay_id', cpayId),
         AsyncStorage.setItem('biometric_enabled', 'false'),
-      ]);
+      ];
+      if (userData.user?.id) {
+        localWrites.push(AsyncStorage.setItem(WALLET_AUTH_USER_ID_KEY, userData.user.id));
+      }
+      await Promise.all(localWrites);
       cachePinForSession(originalPin);
 
       // Cloud save should not block local wallet creation or onboarding progress.
