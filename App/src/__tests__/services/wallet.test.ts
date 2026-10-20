@@ -215,42 +215,38 @@ describe('clearSessionPin', () => {
   });
 });
 
-describe('verifyPin & getWallet — result discrimination & error handling', () => {
+describe('unlockWithPin & getWallet — policy enforcement', () => {
   beforeEach(() => {
     jest.resetModules();
     resetStore();
   });
 
-  test('parses a legacy raw-hex verifier (no JSON) and returns INVALID_PIN when hash does not match', async () => {
+  test('parses a legacy raw-hex verifier and records a failed attempt', async () => {
     const SecureStoreMock = getSecureStoreMock();
-    const { verifyPin } = require('../../services/wallet');
+    const { unlockWithPin } = require('../../services/wallet');
 
     const fakeHex = '0'.repeat(64);
     await SecureStoreMock.setItemAsync('cpay_pin_hash', fakeHex);
     await SecureStoreMock.setItemAsync('cpay_pin_salt', '0'.repeat(32));
 
-    const result = await verifyPin('000000');
-    expect(result).toEqual({ success: false, error: 'INVALID_PIN' });
+    const result = await unlockWithPin('000000');
+    expect(result.status).toBe('INVALID_PIN');
   });
 
-  test('verifyPin returns INVALID_PIN when no verifier is stored', async () => {
-    const { verifyPin } = require('../../services/wallet');
-    const result = await verifyPin('123456');
-    expect(result).toEqual({ success: false, error: 'INVALID_PIN' });
+  test('unlockWithPin returns INVALID_PIN when no verifier is stored', async () => {
+    const { unlockWithPin } = require('../../services/wallet');
+    const result = await unlockWithPin('123456');
+    expect(result.status).toBe('INVALID_PIN');
   });
 
-  test('verifyPin returns STORAGE_ERROR when SecureStore throws an error', async () => {
+  test('unlockWithPin returns STORAGE_ERROR when SecureStore throws an error', async () => {
     const SecureStoreMock = getSecureStoreMock();
-    const { verifyPin } = require('../../services/wallet');
+    const { unlockWithPin } = require('../../services/wallet');
 
     jest.spyOn(SecureStoreMock, 'getItemAsync').mockRejectedValueOnce(new Error('SecureStore disk failure'));
 
-    const result = await verifyPin('123456');
-    expect(result).toEqual({
-      success: false,
-      error: 'STORAGE_ERROR',
-      rawError: expect.any(Error),
-    });
+    const result = await unlockWithPin('123456');
+    expect(result).toEqual({ status: 'STORAGE_ERROR' });
   });
 
   test('getWallet returns INVALID_PIN when wrong PIN is supplied', async () => {
@@ -258,7 +254,7 @@ describe('verifyPin & getWallet — result discrimination & error handling', () 
     await createWallet('123456');
 
     const result = await getWallet('999999');
-    expect(result).toEqual({ success: false, wallet: null, error: 'INVALID_PIN', rawError: undefined });
+    expect(result).toEqual({ success: false, wallet: null, error: 'INVALID_PIN' });
   });
 
   test('getWallet returns STORAGE_ERROR when SecureStore read fails', async () => {
@@ -273,28 +269,37 @@ describe('verifyPin & getWallet — result discrimination & error handling', () 
       success: false,
       wallet: null,
       error: 'STORAGE_ERROR',
-      rawError: expect.any(Error),
     });
   });
 
   test('storage error during PIN check does not increment attempt count', async () => {
     const SecureStoreMock = getSecureStoreMock();
-    const { verifyPin, getPinAttemptState, recordFailedPinAttempt } = require('../../services/wallet');
+    const { unlockWithPin, getPinAttemptState } = require('../../services/wallet');
 
     jest.spyOn(SecureStoreMock, 'getItemAsync').mockRejectedValueOnce(new Error('Transient storage error'));
 
-    const result = await verifyPin('123456');
-    expect(result.success).toBe(false);
-    expect(result.error).toBe('STORAGE_ERROR');
-
-    // Emulate UI logic: recordFailedPinAttempt is ONLY called on INVALID_PIN, NOT on STORAGE_ERROR
-    if (result.error === 'INVALID_PIN') {
-      await recordFailedPinAttempt();
-    }
+    const result = await unlockWithPin('123456');
+    expect(result.status).toBe('STORAGE_ERROR');
 
     const attemptState = await getPinAttemptState();
     expect(attemptState.status).toBe('available');
     expect(attemptState.state.attempts).toBe(0);
+  });
+
+  test('five wrong PINs through unlockWithPin lock the wallet and the fifteenth wipes it', async () => {
+    const { createWallet, unlockWithPin, getPinAttemptState, hasWallet } = require('../../services/wallet');
+    await createWallet('123456');
+    for (let index = 0; index < 4; index += 1) {
+      expect((await unlockWithPin('000000')).status).toBe('INVALID_PIN');
+    }
+    const locked = await unlockWithPin('000000');
+    expect(locked.status).toBe('LOCKED');
+    const state = await getPinAttemptState();
+    if (state.status === 'available') state.state.lockedUntil = 0;
+    const store = getSecureStoreMock().__store;
+    store.cpay_pin_attempts = JSON.stringify({ attempts: 14, lockedUntil: 0 });
+    expect(await unlockWithPin('000000')).toEqual({ status: 'WIPED' });
+    expect(await hasWallet()).toBe(false);
   });
 });
 

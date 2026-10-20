@@ -245,6 +245,13 @@ export type VerifyPinResult =
   | { success: true }
   | { success: false; error: WalletOperationError; rawError?: unknown };
 
+export type PinUnlockResult =
+  | { status: 'OK' }
+  | { status: 'INVALID_PIN'; attemptsLeft: number; attempts: number }
+  | { status: 'LOCKED'; until: number }
+  | { status: 'WIPED' }
+  | { status: 'STORAGE_ERROR' };
+
 export type GetWalletResult =
   | { success: true; wallet: StellarWallet }
   | { success: false; wallet: null; error: WalletOperationError; rawError?: unknown };
@@ -509,10 +516,8 @@ export async function createWallet(pin: string): Promise<string> {
 
 export async function getWallet(pin: string): Promise<GetWalletResult> {
   try {
-    const pinResult = await verifyPin(pin);
-    if (!pinResult.success) {
-      return { success: false, wallet: null, error: pinResult.error, rawError: pinResult.rawError };
-    }
+    const pinResult = await unlockWithPin(pin);
+    if (pinResult.status !== 'OK') return { success: false, wallet: null, error: pinResult.status === 'STORAGE_ERROR' ? 'STORAGE_ERROR' : 'INVALID_PIN' };
 
     const secret = await readSecret(pin);
     if (!secret) {
@@ -559,7 +564,7 @@ export async function hasWallet(): Promise<boolean> {
   }
 }
 
-export async function verifyPin(pin: string, options: VerifyPinOptions = {}): Promise<VerifyPinResult> {
+async function verifyPin(pin: string, options: VerifyPinOptions = {}): Promise<VerifyPinResult> {
   try {
     const { migrate = true, blockMigration = true } = options;
     await recoverPendingPinChange();
@@ -623,15 +628,43 @@ export async function verifyPin(pin: string, options: VerifyPinOptions = {}): Pr
   }
 }
 
+/** The only public PIN verification entry point. All failures update policy state. */
+export async function unlockWithPin(pin: string, options: VerifyPinOptions = {}): Promise<PinUnlockResult> {
+  const current = await getPinAttemptState();
+  if (current.status === 'unknown') return { status: 'STORAGE_ERROR' };
+  if (isLockedOut(current.state)) return { status: 'LOCKED', until: current.state.lockedUntil };
+
+  const result = await verifyPin(pin, options);
+  if (result.success) {
+    try {
+      await clearPinAttempts();
+      return { status: 'OK' };
+    } catch {
+      return { status: 'STORAGE_ERROR' };
+    }
+  }
+  if (result.error === 'STORAGE_ERROR') return { status: 'STORAGE_ERROR' };
+
+  const next = await recordFailedPinAttempt();
+  if (shouldWipeWallet(next)) {
+    try {
+      await wipeWalletAfterFailedAttempts();
+      return { status: 'WIPED' };
+    } catch {
+      return { status: 'STORAGE_ERROR' };
+    }
+  }
+  if (isLockedOut(next)) return { status: 'LOCKED', until: next.lockedUntil };
+  return { status: 'INVALID_PIN', attemptsLeft: attemptsUntilWipe(next), attempts: next.attempts };
+}
+
 export async function changeWalletPin(oldPin: string, newPin: string): Promise<void> {
   // 1. First recover any half-committed change if a previous attempt was killed.
   await recoverPendingPinChange();
 
-  const pinResult = await verifyPin(oldPin, { migrate: false });
-  if (!pinResult.success) {
-    if (pinResult.error === 'STORAGE_ERROR') {
-      throw new Error("Couldn't access secure storage — try again.");
-    }
+  const pinResult = await unlockWithPin(oldPin, { migrate: false });
+  if (pinResult.status !== 'OK') {
+    if (pinResult.status === 'STORAGE_ERROR') throw new Error("Couldn't access secure storage — try again.");
     throw new Error('Invalid current PIN');
   }
 

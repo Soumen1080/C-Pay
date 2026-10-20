@@ -9,7 +9,7 @@ import {
   getWalletFromBiometricBackup,
   getWalletFromSession,
   StellarWallet,
-  verifyPin,
+  unlockWithPin,
 } from '../services/wallet';
 
 // Store reference to PIN dialog functions (will be set by the component)
@@ -40,12 +40,12 @@ export async function authenticateWithPIN(): Promise<boolean> {
       return false;
     }
 
-    const result = await verifyPin(inputPin);
-    if (result.success) {
+    const result = await unlockWithPin(inputPin);
+    if (result.status === 'OK') {
       cachePinForSession(inputPin);
     }
 
-    return result.success;
+    return result.status === 'OK';
   } catch (error) {
     return false;
   }

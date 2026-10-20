@@ -14,7 +14,9 @@ import { PINInput } from './PINInput';
 interface PINDialogProps {
   visible: boolean;
   onCancel: () => void;
-  onConfirm: (pin: string) => void;
+  onConfirm: (pin: string) => boolean | Promise<boolean>;
+  feedback?: string;
+  lockoutUntil?: number;
   title?: string;
   message?: string;
 }
@@ -23,12 +25,15 @@ export const PINDialog: React.FC<PINDialogProps> = ({
   visible,
   onCancel,
   onConfirm,
+  feedback,
+  lockoutUntil,
   title = 'Enter PIN',
   message = 'Enter your 6-digit PIN to confirm',
 }) => {
   useTheme();
   const [pin, setPin] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [now, setNow] = useState(Date.now());
   const scaleAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -46,10 +51,20 @@ export const PINDialog: React.FC<PINDialogProps> = ({
     }
   }, [visible]);
 
-  const handleSubmit = (pinToSubmit = pin) => {
+  useEffect(() => {
+    if (!visible || !lockoutUntil) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [visible, lockoutUntil]);
+
+  const handleSubmit = async (pinToSubmit = pin) => {
     if (pinToSubmit.length === 6 && !submitting) {
       setSubmitting(true);
-      onConfirm(pinToSubmit);
+      const accepted = await onConfirm(pinToSubmit);
+      if (!accepted) {
+        setPin('');
+        setSubmitting(false);
+      }
     }
   };
 
@@ -75,6 +90,10 @@ export const PINDialog: React.FC<PINDialogProps> = ({
         >
           <Text style={styles.title}>{title}</Text>
           <Text style={styles.message}>{message}</Text>
+          {!!feedback && <Text style={styles.feedback}>{feedback}</Text>}
+          {!!lockoutUntil && lockoutUntil > now && (
+            <Text style={styles.feedback}>Locked for {Math.ceil((lockoutUntil - now) / 1000)} seconds.</Text>
+          )}
 
           <PINInput
             value={pin}
@@ -146,6 +165,12 @@ const styles = createThemedStyles((COLORS) => ({
     color: COLORS.textMuted,
     textAlign: 'center',
     marginBottom: SPACING.xl,
+  },
+  feedback: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.error,
+    textAlign: 'center',
+    marginBottom: SPACING.md,
   },
   buttonRow: {
     flexDirection: 'row',

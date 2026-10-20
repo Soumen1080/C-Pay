@@ -11,7 +11,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { PINInput } from '../components/PINInput';
 import { Screen } from '../components';
-import { cachePinForSession, verifyPin, changeWalletPin } from '../services/wallet';
+import { cachePinForSession, unlockWithPin, changeWalletPin } from '../services/wallet';
 import { COLORS, SPACING, TYPOGRAPHY, BORDER_RADIUS, createThemedStyles, useTheme } from '../constants/theme';
 import { AlertManager } from '../utils/alert';
 
@@ -36,17 +36,23 @@ export const ChangePINScreen: React.FC<ChangePINScreenProps> = ({ navigation }) 
     setError('');
     
     try {
-      // Use wallet.ts verifyPin function to check against SecureStore
-      const result = await verifyPin(pin);
+      const result = await unlockWithPin(pin);
       
-      if (result.success) {
+      if (result.status === 'OK') {
         setCurrentPin(pin);
         setStep('new');
-      } else if (result.error === 'STORAGE_ERROR') {
+      } else if (result.status === 'STORAGE_ERROR') {
         setError("Couldn't access secure storage — try again.");
         setTimeout(() => setCurrentPin(''), 300);
+      } else if (result.status === 'WIPED') {
+        setError('Wallet erased after too many incorrect PIN attempts. Restore your wallet to continue.');
+        setTimeout(() => navigation.replace('Onboarding'), 500);
+      } else if (result.status === 'LOCKED') {
+        const seconds = Math.ceil((result.until - Date.now()) / 1000);
+        setError(`Too many incorrect attempts. Try again in ${seconds} seconds.`);
+        setTimeout(() => setCurrentPin(''), 300);
       } else {
-        setError('Incorrect PIN. Please try again.');
+        setError(`Incorrect PIN. ${result.attemptsLeft} attempt${result.attemptsLeft === 1 ? '' : 's'} remaining before wallet erasure.`);
         setTimeout(() => setCurrentPin(''), 300);
       }
     } catch (err) {
