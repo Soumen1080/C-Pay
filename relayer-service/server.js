@@ -920,15 +920,25 @@ async function bindWalletToUser(authUserId, walletAddress) {
     return;
   }
 
-  await supabaseRestRequest('wallet_bindings', {
-    method: 'POST',
-    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-    body: JSON.stringify({
+  try {
+    await supabaseRestRequest('wallet_bindings', {
+      method: 'POST',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({
       auth_user_id: authUserId,
       wallet_address: walletAddress,
       is_active: true,
-    }),
-  });
+      }),
+    });
+  } catch (error) {
+    if (!isPostgresUniqueViolation(error)) throw error;
+    const owner = await resolveWalletOwner(walletAddress);
+    if (owner.ok && owner.owner === authUserId) return;
+    if (owner.ok && owner.owner) {
+      throw Object.assign(new Error('Wallet is already bound to another user'), { statusCode: 403, code: 'WALLET_OWNERSHIP_DENIED' });
+    }
+    throw error;
+  }
 }
 
 /**
@@ -1150,6 +1160,9 @@ function requireAccountPreparationOwnership(walletField = 'accountId') {
       try {
         await bindWalletToUser(authUid, accountId);
       } catch (error) {
+        if (error.statusCode === 403) {
+          return res.status(403).json({ error: error.message, code: error.code });
+        }
         console.error('Failed to bind wallet:', error.message);
         return sendWalletOwnershipUnavailable(res, error, 'WALLET_BINDING_FAILED');
       }
