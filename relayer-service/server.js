@@ -330,9 +330,11 @@ app.post('/accounts/submit', requireAuthenticatedUser, requireWalletOwnership(),
 app.post('/payments/submit', requireAuthenticatedUser, requireWalletOwnership(), async (req, res) => {
   const signedXdr = assertTransactionEnvelopeXdr(req.body.signedXdr);
   const idempotencyKey = normalizeOptionalString(req.body.idempotencyKey);
+  const authUid = req.auth && req.auth.sub;
 
   if (idempotencyKey) {
-    const lock = await acquireIdempotencyLock(idempotencyKey, config.idempotencyTtlMs);
+    const lock = await acquireClientIdempotencyLock(authUid, idempotencyKey, signedXdr, config.idempotencyTtlMs);
+    if (lock.mismatch) return res.status(422).json({ error: 'Idempotency key was already used with a different request', code: 'IDEMPOTENCY_KEY_REUSED' });
     if (!lock.acquired) {
       if (lock.response === null) {
         return res.status(409).json({
@@ -343,6 +345,9 @@ app.post('/payments/submit', requireAuthenticatedUser, requireWalletOwnership(),
       }
       return res.json(lock.response);
     }
+    res.once('finish', () => {
+      if (res.statusCode >= 400) releaseClientIdempotencyLock(authUid, idempotencyKey).catch(() => {});
+    });
   }
 
   const innerTransaction = StellarSdk.TransactionBuilder.fromXDR(signedXdr, config.passphrase);
@@ -356,7 +361,6 @@ app.post('/payments/submit', requireAuthenticatedUser, requireWalletOwnership(),
 
   const paymentDetails = validatePaymentTransaction(innerTransaction);
 
-  const authUid = req.auth && req.auth.sub;
   const walletAddress = innerTransaction.source;
 
   try {
@@ -404,7 +408,7 @@ app.post('/payments/submit', requireAuthenticatedUser, requireWalletOwnership(),
   };
 
   if (idempotencyKey) {
-    await setIdempotencyResponse(idempotencyKey, response, config.idempotencyTtlMs);
+    await setClientIdempotencyResponse(authUid, idempotencyKey, response);
   }
 
   res.json(response);
@@ -448,7 +452,9 @@ app.post('/add-money', requireAuthenticatedUser, requireWalletOwnership('account
   const userLockKey = `add-money-user:${authUserId || accountId}`;
 
   if (idempotencyKey) {
-    const lock = await acquireIdempotencyLock(idempotencyKey, config.idempotencyTtlMs);
+    const requestBody = JSON.stringify({ accountId, amount });
+    const lock = await acquireClientIdempotencyLock(authUserId, idempotencyKey, requestBody, config.idempotencyTtlMs);
+    if (lock.mismatch) return res.status(422).json({ error: 'Idempotency key was already used with a different request', code: 'IDEMPOTENCY_KEY_REUSED' });
     if (!lock.acquired) {
       if (lock.response === null) {
         return res.status(409).json({
@@ -459,6 +465,9 @@ app.post('/add-money', requireAuthenticatedUser, requireWalletOwnership('account
       }
       return res.json(lock.response);
     }
+    res.once('finish', () => {
+      if (res.statusCode >= 400) releaseClientIdempotencyLock(authUserId, idempotencyKey).catch(() => {});
+    });
   }
 
   // Acquire user-level lock to prevent concurrent claims (race condition)
@@ -549,7 +558,7 @@ app.post('/add-money', requireAuthenticatedUser, requireWalletOwnership('account
     await settleAddMoneyClaim(claimId, result.hash);
 
     if (idempotencyKey) {
-      await setIdempotencyResponse(idempotencyKey, response, config.idempotencyTtlMs);
+      await setClientIdempotencyResponse(authUserId, idempotencyKey, response);
     }
 
     return res.json(response);
@@ -1686,6 +1695,36 @@ async function acquireIdempotencyLock(key, ttlMs) {
   }
 }
 
+async function acquireClientIdempotencyLock(authUserId, key, requestBody, ttlMs) {
+  if (!authUserId) throw Object.assign(new Error('Authenticated user is required for idempotency'), { statusCode: 401 });
+  const requestHash = crypto.createHash('sha256').update(requestBody).digest('hex');
+  if (!isSupabasePersistenceEnabled()) return { acquired: true, requestHash };
+  const record = { auth_user_id: authUserId, key, request_hash: requestHash, response: null, expires_at: new Date(Date.now() + ttlMs).toISOString() };
+  try {
+    await supabaseRestRequest('relayer_client_idempotency_keys', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(record) });
+    return { acquired: true, requestHash };
+  } catch (error) {
+    if (!isPostgresUniqueViolation(error)) throw error;
+    const query = new URLSearchParams({ select: 'request_hash,response', auth_user_id: `eq.${authUserId}`, key: `eq.${key}`, limit: '1' });
+    const rows = await supabaseRestRequest(`relayer_client_idempotency_keys?${query}`, { method: 'GET', headers: { Accept: 'application/json' } });
+    if (!rows?.length) throw error;
+    if (rows[0].request_hash !== requestHash) return { acquired: false, mismatch: true };
+    return { acquired: false, response: rows[0].response };
+  }
+}
+
+async function setClientIdempotencyResponse(authUserId, key, response) {
+  if (!isSupabasePersistenceEnabled()) return;
+  const query = new URLSearchParams({ auth_user_id: `eq.${authUserId}`, key: `eq.${key}` });
+  await supabaseRestRequest(`relayer_client_idempotency_keys?${query}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ response }) });
+}
+
+async function releaseClientIdempotencyLock(authUserId, key) {
+  if (!isSupabasePersistenceEnabled() || !authUserId) return;
+  const query = new URLSearchParams({ auth_user_id: `eq.${authUserId}`, key: `eq.${key}`, response: 'is.null' });
+  await supabaseRestRequest(`relayer_client_idempotency_keys?${query}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
+}
+
 async function setIdempotencyResponse(key, response, ttlMs) {
   if (!isSupabasePersistenceEnabled()) {
     return;
@@ -1867,6 +1906,10 @@ async function cleanExpiredPersistedState() {
   try {
     const now = new Date().toISOString();
     await supabaseRestRequest(`relayer_idempotency_keys?expires_at=lte.${encodeURIComponent(now)}`, {
+      method: 'DELETE',
+      headers: { Prefer: 'return=minimal' },
+    });
+    await supabaseRestRequest(`relayer_client_idempotency_keys?expires_at=lte.${encodeURIComponent(now)}`, {
       method: 'DELETE',
       headers: { Prefer: 'return=minimal' },
     });
