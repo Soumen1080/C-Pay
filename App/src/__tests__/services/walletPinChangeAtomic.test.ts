@@ -235,6 +235,36 @@ describe('Atomic PIN change & recovery (issue #119)', () => {
     expect(newRes.error).toBe('INVALID_PIN');
   });
 
+  test('staged credentials are removed when staging fails before commit', async () => {
+    const wallet = require('../../services/wallet');
+    const SecureStoreMock = getSecureStoreMock();
+    const OLD_PIN = '123456';
+    const NEW_PIN = '789012';
+
+    await wallet.createWallet(OLD_PIN);
+
+    const setItem = jest.spyOn(SecureStoreMock, 'setItemAsync');
+    const defaultSetItem = setItem.getMockImplementation()!;
+    setItem.mockImplementation(async (key, val) => {
+      if (key === wallet.PENDING_PIN_KEY) {
+        throw new Error('SecureStore write failed');
+      }
+      return defaultSetItem(key, val);
+    });
+
+    await expect(wallet.changeWalletPin(OLD_PIN, NEW_PIN)).rejects.toThrow('SecureStore write failed');
+
+    jest.restoreAllMocks();
+    expect(await SecureStoreMock.getItemAsync(wallet.PENDING_SLOT_KEY)).toBeNull();
+    expect(await SecureStoreMock.getItemAsync(wallet.PENDING_WALLET_KEY)).toBeNull();
+    expect(await SecureStoreMock.getItemAsync(wallet.PENDING_SALT_KEY)).toBeNull();
+    expect(await SecureStoreMock.getItemAsync(wallet.PENDING_PIN_KEY)).toBeNull();
+
+    wallet.clearSessionPin();
+    expect((await wallet.getWallet(OLD_PIN)).success).toBe(true);
+    expect((await wallet.getWallet(NEW_PIN)).error).toBe('INVALID_PIN');
+  });
+
   test('wipe safety: clearWallet resolves any pending change before deleting keys', async () => {
     const wallet = require('../../services/wallet');
     const SecureStoreMock = getSecureStoreMock();
