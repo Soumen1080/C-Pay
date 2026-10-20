@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(12);
+SELECT plan(13);
 
 -- Functions owned by an extension (uuid-ossp, pgtap, ...) are not ours to audit.
 CREATE TEMP VIEW audited_functions AS
@@ -117,6 +117,12 @@ SELECT ok(
   has_table_privilege('service_role', 'public.wallet_bindings', 'SELECT')
   AND has_table_privilege('service_role', 'public.wallet_bindings', 'INSERT'),
   'service_role (relayer) can still read and write wallet_bindings'
+);
+
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.wallet_bindings', 'INSERT')
+  AND NOT has_table_privilege('authenticated', 'public.wallet_bindings', 'UPDATE'),
+  'authenticated clients cannot insert or update wallet_bindings'
 );
 
 SELECT * FROM finish();
