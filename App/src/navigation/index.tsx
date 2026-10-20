@@ -45,6 +45,7 @@ type RootStackParamList = {
     displayName?: string | null;
     cpayId?: string | null;
     profilePhotoUrl?: string | null;
+    accountSwitch?: boolean;
   };
   Login: undefined;
   MainTabs: undefined;
