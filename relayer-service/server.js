@@ -1414,6 +1414,8 @@ async function acquireAddMoneyUserLock(userLockKey, ttlMs) {
       return { acquired: true };
     } catch (error) {
       if (isPostgresUniqueViolation(error)) {
+        // A failed database insert must never leave a local entry looking held.
+        delete activeAddMoneyUserLocks[userLockKey];
         // Lock already held by this or another instance. Check for expiry.
         try {
           const query = new URLSearchParams({ select: 'expires_at', key: `eq.${userLockKey}`, limit: '1' });
@@ -1441,6 +1443,7 @@ async function acquireAddMoneyUserLock(userLockKey, ttlMs) {
         } catch {}
         return { acquired: false };
       }
+      delete activeAddMoneyUserLocks[userLockKey];
       throw createAddMoneyPersistenceError(error, 'lock acquisition');
     }
   }
