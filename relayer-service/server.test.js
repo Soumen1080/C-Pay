@@ -1366,8 +1366,46 @@ describe('Multi-instance coordination and bounded memory state', () => {
       });
 
       const mod = await loadServerModule({ __fetchMock: customFetch });
-      const result = await mod.testHooks.acquireAddMoneyUserLock('add-money-user:user-conflict', 60000);
+      const key = 'add-money-user:user-conflict';
+      mod.testHooks.activeAddMoneyUserLocks[key] = Date.now() + 60000;
+      const result = await mod.testHooks.acquireAddMoneyUserLock(key, 60000);
       expect(result).toEqual({ acquired: false });
+      expect(mod.testHooks.activeAddMoneyUserLocks[key]).toBeUndefined();
+    });
+
+    it('returns acquired true after a successful persisted insert', async () => {
+      const customFetch = jest.fn(async (url, options) => {
+        if (String(url).includes('/rest/v1/relayer_idempotency_keys') && options?.method === 'POST') {
+          return makeResponse(true, 201, null);
+        }
+        return makeResponse(true, 200, []);
+      });
+      const mod = await loadServerModule({ __fetchMock: customFetch });
+      const key = 'add-money-user:user-success';
+
+      await expect(mod.testHooks.acquireAddMoneyUserLock(key, 60000))
+        .resolves.toEqual({ acquired: true });
+      expect(mod.testHooks.activeAddMoneyUserLocks[key]).toBeGreaterThan(Date.now());
+    });
+
+    it('wraps persisted lock write failures and clears the in-memory entry', async () => {
+      const customFetch = jest.fn(async (url, options) => {
+        if (String(url).includes('/rest/v1/relayer_idempotency_keys') && options?.method === 'POST') {
+          return makeResponse(false, 503, { code: 'PGRST000', message: 'database unavailable' });
+        }
+        return makeResponse(true, 200, []);
+      });
+      const mod = await loadServerModule({ __fetchMock: customFetch });
+      const key = 'add-money-user:user-db-error';
+      mod.testHooks.activeAddMoneyUserLocks[key] = Date.now() + 60000;
+
+      await expect(mod.testHooks.acquireAddMoneyUserLock(key, 60000))
+        .rejects.toMatchObject({
+          statusCode: 503,
+          code: 'ADD_MONEY_PERSISTENCE_UNAVAILABLE',
+          retryable: true,
+        });
+      expect(mod.testHooks.activeAddMoneyUserLocks[key]).toBeUndefined();
     });
 
     it('Branch 2: acquireIdempotencyLock handles PostgREST 409 unique constraint conflict and returns cached response', async () => {
