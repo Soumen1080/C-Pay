@@ -7,6 +7,21 @@ import { stopTransactionPolling } from './transactionMonitor';
 // Rate limiting constants
 const MAX_OTP_ATTEMPTS_PER_DAY = 10;
 const OTP_RATE_LIMIT_KEY = 'otp_rate_limit';
+export const WALLET_AUTH_USER_ID_KEY = 'wallet_auth_user_id';
+
+export async function clearCachedAccountData(): Promise<void> {
+  await AsyncStorage.multiRemove([
+    'transactions',
+    'display_name',
+    'cpay_id',
+    'profile_photo',
+    'profile_complete',
+    'user_name',
+    'notifications_enabled',
+    'cloud_backup_required',
+    'cloud_backup_complete',
+  ]);
+}
 
 function getRetryHours(resetTime: Date): number {
   return Math.max(1, Math.ceil((resetTime.getTime() - Date.now()) / (1000 * 60 * 60)));
@@ -307,6 +322,7 @@ export async function signOut(): Promise<void> {
   await supabase.auth.signOut();
   stopTransactionPolling();
   await supabase.removeAllChannels();
+  await clearCachedAccountData();
   await AsyncStorage.multiRemove([
     'auth_token',
     // Legacy phone-OTP keys: no longer written, cleared from older installs.
@@ -315,11 +331,6 @@ export async function signOut(): Promise<void> {
     'user_phone',
     'email_verified',
     'user_email',
-    'transactions',
-    'display_name',
-    'cpay_id',
-    'profile_photo',
-    'profile_complete',
   ]);
   clearSessionPin();
 }
