@@ -8,11 +8,13 @@ import { Navigation } from './src/navigation';
 import { PINDialog, CustomAlertProvider } from './src/components';
 import { setPINDialogHandler } from './src/utils/biometric';
 import { AlertManager } from './src/utils/alert';
-import { cachePinForSession, clearSessionPin, verifyPin } from './src/services/wallet';
+import { cachePinForSession, clearSessionPin, unlockWithPin } from './src/services/wallet';
 import { ThemeProvider, useTheme } from './src/constants/theme';
 
 const AppContent = () => {
   const [pinDialogVisible, setPinDialogVisible] = useState(false);
+  const [pinFeedback, setPinFeedback] = useState('');
+  const [pinLockedUntil, setPinLockedUntil] = useState<number | undefined>();
   const [pinDialogConfig, setPinDialogConfig] = useState({
     title: 'Enter PIN',
     message: 'Enter your 6-digit PIN to confirm',
@@ -44,27 +46,38 @@ const AppContent = () => {
   useEffect(() => {
     setPINDialogHandler((title: string, message: string) => {
       return new Promise<string | null>((resolve) => {
+        setPinFeedback('');
+        setPinLockedUntil(undefined);
         setPinDialogConfig({ title, message, resolve });
         setPinDialogVisible(true);
       });
     });
   }, []);
 
-  const handlePINConfirm = async (pin: string) => {
-    setPinDialogVisible(false);
-
-    const result = await verifyPin(pin);
-
-    if (result.success) {
+  const handlePINConfirm = async (pin: string): Promise<boolean> => {
+    const result = await unlockWithPin(pin);
+    if (result.status === 'OK') {
+      setPinDialogVisible(false);
+      setPinFeedback('');
+      setPinLockedUntil(undefined);
       cachePinForSession(pin);
       pinDialogConfig.resolve?.(pin);
-    } else if (result.error === 'STORAGE_ERROR') {
-      AlertManager.alert('Storage Error', "Couldn't access secure storage — try again.", undefined, { type: 'error' });
-      pinDialogConfig.resolve?.(null);
-    } else {
-      AlertManager.alert('Incorrect PIN', 'The PIN you entered is incorrect', undefined, { type: 'error' });
-      pinDialogConfig.resolve?.(null);
+      return true;
     }
+    if (result.status === 'STORAGE_ERROR') {
+      setPinFeedback("Couldn't access secure storage. Try again.");
+    } else if (result.status === 'LOCKED') {
+      setPinLockedUntil(result.until);
+      setPinFeedback('Too many incorrect attempts.');
+    } else if (result.status === 'WIPED') {
+      setPinDialogVisible(false);
+      pinDialogConfig.resolve?.(null);
+      AlertManager.alert('Wallet erased from this device', 'After 15 incorrect PIN attempts, the wallet was removed from this device. Restore it from your encrypted backup if available.', undefined, { type: 'error' });
+      return true;
+    } else {
+      setPinFeedback(`Incorrect PIN. ${result.attemptsLeft} attempt${result.attemptsLeft === 1 ? '' : 's'} remaining before wallet erasure.`);
+    }
+    return false;
   };
 
   const handlePINCancel = () => {
@@ -84,6 +97,8 @@ const AppContent = () => {
             visible={pinDialogVisible}
             title={pinDialogConfig.title}
             message={pinDialogConfig.message}
+            feedback={pinFeedback}
+            lockoutUntil={pinLockedUntil}
             onConfirm={handlePINConfirm}
             onCancel={handlePINCancel}
           />

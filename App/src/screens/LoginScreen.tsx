@@ -17,19 +17,14 @@ import { Screen } from '../components';
 import {
   attemptsUntilWipe,
   cachePinForSession,
-  clearPinAttempts,
   getWalletFromBiometricBackup,
   getPinAttemptState,
   hasBiometricBackup,
   isLockedOut,
   lockoutRemainingMs,
-  MAX_PIN_ATTEMPTS,
   MAX_LOCKOUT_MS,
-  recordFailedPinAttempt,
   shouldWarnAboutWipe,
-  shouldWipeWallet,
-  verifyPin,
-  wipeWalletAfterFailedAttempts,
+  unlockWithPin,
   WIPE_PIN_ATTEMPTS,
 } from '../services/wallet';
 import { isBiometricAvailable, getBiometricType } from '../utils/biometric';
@@ -187,26 +182,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
         return;
       }
 
-      const result = await verifyPin(pinToVerify, { blockMigration: false });
+      const result = await unlockWithPin(pinToVerify, { blockMigration: false });
 
-      if (result.success) {
-        await clearPinAttempts();
+      if (result.status === 'OK') {
         setAttemptCount(0);
         setLockoutMs(0);
         cachePinForSession(pinToVerify);
         await navigateAfterWalletUnlock();
-      } else if (result.error === 'STORAGE_ERROR') {
+      } else if (result.status === 'STORAGE_ERROR') {
         setError("Couldn't access secure storage — try again.");
         setPin('');
-      } else {
-        const nextState = await recordFailedPinAttempt();
-        setAttemptCount(nextState.attempts);
-
-        // Wipe threshold reached: erase local wallet state and send the user to
-        // recovery. Checked before lockout messaging — once we wipe, there is
-        // nothing left to lock out.
-        if (shouldWipeWallet(nextState)) {
-          await wipeWalletAfterFailedAttempts();
+      } else if (result.status === 'WIPED') {
           setPin('');
           setLoading(false);
           AlertManager.alert(
@@ -217,21 +203,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
             [{ text: 'Restore wallet', onPress: () => navigation.replace('Onboarding') }],
           );
           return;
-        }
-
-        const remaining = lockoutRemainingMs(nextState);
-        if (remaining > 0) {
+      } else if (result.status === 'LOCKED') {
+          const remaining = Math.max(0, result.until - Date.now());
           setLockoutMs(remaining);
           startCountdown();
           setError('Too many incorrect attempts. Please wait before trying again.');
-        } else {
-          const attemptsLeft = MAX_PIN_ATTEMPTS - nextState.attempts;
-          if (attemptsLeft > 0) {
-            setError(`Incorrect PIN. ${attemptsLeft} attempt${attemptsLeft === 1 ? '' : 's'} remaining before lockout.`);
-          } else {
-            setError('Incorrect PIN.');
-          }
-        }
+      } else {
+        const state = await getPinAttemptState();
+        const attempts = state.status === 'available' ? state.state.attempts : 0;
+        setAttemptCount(attempts);
+        const left = result.attemptsLeft;
+        setError(`Incorrect PIN. ${left} attempt${left === 1 ? '' : 's'} remaining before wallet erasure.`);
         setPin('');
       }
     } catch (err) {
