@@ -80,7 +80,10 @@ function loadConfig(env = process.env) {
     baseFee: String(readNumber(env, 'STELLAR_BASE_FEE', StellarSdk.BASE_FEE, { integer: true, min: 0, exclusiveMin: true })),
     feeBumpMultiplier: readNumber(env, 'FEE_BUMP_MULTIPLIER', 10, { integer: true, min: 0, exclusiveMin: true }),
     transactionTimeoutSeconds: readNumber(env, 'TRANSACTION_TIMEOUT_SECONDS', 60, { integer: true, min: 0, exclusiveMin: true }),
-    startingBalance: readDecimalString(env, 'STARTING_BALANCE', '1.5'),
+    // Sponsored reserves make a starting balance unnecessary. Keep this
+    // fixed so an environment override cannot turn sponsorship into a
+    // withdrawable-XLM grant.
+    startingBalance: '0',
     trustlineLimit: readDecimalString(env, 'TRUSTLINE_LIMIT', '1000000000'),
     maxSponsoredAccountsPerUser: readNumber(env, 'MAX_SPONSORED_ACCOUNTS_PER_USER', 5, { integer: true, min: 0, exclusiveMin: true }),
     addMoneyAmount: readDecimalString(env, 'ADD_MONEY_AMOUNT', '100'),
