@@ -128,7 +128,7 @@ app.get('/', (_req, res) => {
   });
 });
 
-app.get('/ingest/health', requireAuthenticatedUser, (_req, res) => {
+app.get('/ingest/health', requireAdminToken, (_req, res) => {
   res.json(ingestWorker.getHealth());
 });
 
@@ -159,43 +159,41 @@ app.post('/quotes/validate', requireAuthenticatedUser, (req, res) => {
   }
 });
 
-app.get('/health/detailed', requireAuthenticatedUser, async (_req, res) => {
-  const [sponsorBalances, distributionBalances] = await Promise.all([
-    getBalances(sponsorSigner.publicKey()),
-    getBalances(distributionSigner.publicKey()),
-  ]);
+app.get('/health/detailed', requireAdminToken, async (_req, res) => {
+  try {
+    const [sponsorBalances, distributionBalances] = await Promise.all([
+      getBalances(sponsorSigner.publicKey()),
+      getBalances(distributionSigner.publicKey()),
+    ]);
 
-  const sponsorXlm = Number(sponsorBalances.xlm || '0');
-  const distributionAsset = Number(distributionBalances.asset || '0');
-  const lowXlm = sponsorXlm < config.lowXlmThreshold;
-  const lowAsset = distributionAsset < config.lowAssetThreshold;
+    const sponsorXlm = Number(sponsorBalances.xlm || '0');
+    const distributionAsset = Number(distributionBalances.asset || '0');
 
-  if (lowXlm || lowAsset) {
-    if (await shouldSendLowBalanceAlert()) {
-      await sendLowBalanceAlert({ sponsorXlm, distributionAsset, lowXlm, lowAsset });
-    }
-  } else {
-    await resetLowBalanceAlert();
+    res.json({
+      status: 'healthy',
+      network: config.networkName,
+      assetCode: config.assetCode,
+      assetIssuer: config.assetIssuer,
+      sponsorPublicKey: sponsorSigner.publicKey(),
+      distributionPublicKey: distributionSigner.publicKey(),
+      sponsorXlmBalance: sponsorBalances.xlm,
+      distributionUsdcBalance: distributionBalances.asset,
+      authRequired: config.authRequired,
+      authApiConfigured: Boolean(config.supabaseUrl && config.supabaseServiceRoleKey),
+      legacyJwtSecretConfigured: Boolean(config.supabaseJwtSecret),
+      supabasePersistenceEnabled: isSupabasePersistenceEnabled(),
+      ingest: ingestWorker.getHealth(),
+      lowXlm: sponsorXlm < config.lowXlmThreshold,
+      lowAsset: distributionAsset < config.lowAssetThreshold,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Detailed health check failed:', error.message);
+    res.status(500).json({
+      error: 'Detailed health check failed',
+      code: 'HEALTH_CHECK_FAILED',
+    });
   }
-
-  res.json({
-    status: 'healthy',
-    network: config.networkName,
-    assetCode: config.assetCode,
-    assetIssuer: config.assetIssuer,
-    sponsorPublicKey: sponsorSigner.publicKey(),
-    distributionPublicKey: distributionSigner.publicKey(),
-    sponsorXlmBalance: sponsorBalances.xlm,
-    distributionUsdcBalance: distributionBalances.asset,
-    authRequired: config.authRequired,
-    authApiConfigured: Boolean(config.supabaseUrl && config.supabaseServiceRoleKey),
-    legacyJwtSecretConfigured: Boolean(config.supabaseJwtSecret),
-    supabasePersistenceEnabled: isSupabasePersistenceEnabled(),
-    ingest: ingestWorker.getHealth(),
-    lowXlm,
-    lowAsset,
-    timestamp: new Date().toISOString(),
-  });
 });
 
 app.get('/account/:accountId/status', requireAuthenticatedUser, requirePathWalletOwnership(), async (req, res) => {
@@ -231,9 +229,6 @@ app.post(
   requireAccountPreparationOwnership('accountId'),
   async (req, res) => {
     const accountId = assertAccountId(req.body.accountId, 'accountId');
-
-    // Check sponsor balance alarm
-    checkSponsorBalanceAlarm().catch(() => {});
 
     const status = await getAccountStatus(accountId);
 
@@ -653,6 +648,12 @@ async function startRelayer() {
   });
   setInterval(() => cleanExpiredPersistedState().catch(() => {}), 60 * 60 * 1000).unref();
 
+  setInterval(() => {
+    checkLowBalanceAlerts().catch(error => {
+      console.error('Scheduled low-balance check failed:', error.message);
+    });
+  }, config.lowBalanceCheckIntervalMs).unref();
+
   return relayerHttpServer;
 }
 
@@ -693,6 +694,7 @@ module.exports = {
       inMemoryPaymentRecords,
       shouldSendLowBalanceAlert,
       resetLowBalanceAlert,
+      checkLowBalanceAlerts,
       preparedAccountTransactions,
       prunePreparedAccountTransactions,
       activeAddMoneyUserLocks,
@@ -754,7 +756,9 @@ function loadConfig() {
     idempotencyTtlMs: Number(process.env.IDEMPOTENCY_TTL_MS || 10 * 60 * 1000),
     lowXlmThreshold: Number(process.env.LOW_XLM_THRESHOLD || 5),
     lowAssetThreshold: Number(process.env.LOW_USDC_THRESHOLD || 100),
+    lowBalanceCheckIntervalMs: Number(process.env.LOW_BALANCE_CHECK_INTERVAL_MS || 5 * 60 * 1000),
     authRequired,
+    adminToken: process.env.RELAYER_ADMIN_TOKEN || '',
     supabaseJwtSecret,
     supabaseUrl,
     supabaseServiceRoleKey,
@@ -827,6 +831,27 @@ async function requireAuthenticatedUser(req, res, next) {
       code: 'AUTH_REQUIRED',
     });
   }
+}
+
+function requireAdminToken(req, res, next) {
+  if (!config.adminToken) {
+    return res.status(503).json({
+      error: 'Operator access is not configured',
+      code: 'ADMIN_AUTH_NOT_CONFIGURED',
+    });
+  }
+
+  const providedToken = req.get('x-admin-token') || '';
+  const expectedDigest = crypto.createHash('sha256').update(config.adminToken).digest();
+  const providedDigest = crypto.createHash('sha256').update(providedToken).digest();
+  if (!crypto.timingSafeEqual(providedDigest, expectedDigest)) {
+    return res.status(403).json({
+      error: 'Operator access required',
+      code: 'ADMIN_AUTH_REQUIRED',
+    });
+  }
+
+  return next();
 }
 
 /**
@@ -938,26 +963,6 @@ async function bindWalletToUser(authUserId, walletAddress) {
       throw Object.assign(new Error('Wallet is already bound to another user'), { statusCode: 403, code: 'WALLET_OWNERSHIP_DENIED' });
     }
     throw error;
-  }
-}
-
-/**
- * Check sponsor account XLM balance and trigger alarm if below threshold.
- */
-async function checkSponsorBalanceAlarm() {
-  try {
-    const balances = await getBalances(sponsorSigner.publicKey());
-    const sponsorXlm = Number(balances.xlm || '0');
-    if (sponsorXlm < config.lowXlmThreshold) {
-      console.warn('[SPONSOR_DRAIN_ALARM] Sponsor account XLM balance is low');
-      if (typeof sendLowBalanceAlert === 'function') {
-        if (await shouldSendLowBalanceAlert()) {
-          sendLowBalanceAlert({ sponsorXlm, distributionAsset: null, lowXlm: true, lowAsset: false }).catch(() => {});
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('Failed to check sponsor balance alarm:', err.message);
   }
 }
 
@@ -2061,6 +2066,25 @@ async function sendLowBalanceAlert({ sponsorXlm, distributionAsset, lowXlm, lowA
   });
 }
 
+async function checkLowBalanceAlerts() {
+  const [sponsorBalances, distributionBalances] = await Promise.all([
+    getBalances(sponsorSigner.publicKey()),
+    getBalances(distributionSigner.publicKey()),
+  ]);
+  const sponsorXlm = Number(sponsorBalances.xlm || '0');
+  const distributionAsset = Number(distributionBalances.asset || '0');
+  const lowXlm = sponsorXlm < config.lowXlmThreshold;
+  const lowAsset = distributionAsset < config.lowAssetThreshold;
+
+  if (lowXlm || lowAsset) {
+    if (await shouldSendLowBalanceAlert()) {
+      await sendLowBalanceAlert({ sponsorXlm, distributionAsset, lowXlm, lowAsset });
+    }
+  } else {
+    await resetLowBalanceAlert();
+  }
+}
+
 const LOW_BALANCE_ALERT_KEY = 'alert:low-balance';
 
 async function shouldSendLowBalanceAlert() {
@@ -2128,4 +2152,3 @@ async function resetLowBalanceAlert() {
     } catch {}
   }
 }
-
