@@ -20,7 +20,7 @@ USDC_ASSET_ISSUER=GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
 - `CPINR_ASSET_ISSUER`: issuer public key from blockchain setup
 - `SPONSOR_SECRET`: secret seed for the account that sponsors reserves and pays fees
 - `DISTRIBUTION_SECRET`: secret seed for the hot distribution account
-- `RELAYER_AUTH_REQUIRED`: set to `true` for production/public-network deployments
+- `RELAYER_AUTH_REQUIRED`: defaults to `true`; it may be set to `false` only when `NODE_ENV=development`
 - `RELAYER_ADMIN_TOKEN`: required operator credential for `/health/detailed` and `/ingest/health`, sent as `X-Admin-Token`
 - `LOW_BALANCE_CHECK_INTERVAL_MS`: interval for background low-balance alert checks (default: `300000`)
 - `SUPABASE_JWT_SECRET`: optional legacy HS256 token verification; when omitted, the Supabase Auth API validates tokens
@@ -96,8 +96,8 @@ The Ingest Worker continuously streams/polls Horizon payment operations:
 ## Production Notes
 
 - Put the relayer behind HTTPS.
-- Restrict `CORS_ORIGIN` to app domains/builds.
-- Enable `RELAYER_AUTH_REQUIRED=true` and configure Supabase token verification so only authenticated app users can spend sponsored relayer resources.
+- Restrict `CORS_ORIGIN` to app domains/builds. `*` is rejected when `NODE_ENV=production`.
+- Configure Supabase token verification so only authenticated app users can spend sponsored relayer resources. The relayer no longer accepts `EXPO_PUBLIC_SUPABASE_URL` as a server URL.
 - Set a strong `RELAYER_ADMIN_TOKEN` and provide it only to trusted monitoring systems; the detailed health endpoints return `403` without it, even when user authentication is disabled.
 - Leave `ENABLE_TESTNET_FAUCET=false`. Production money-in requires a licensed on-ramp partner.
 - Rotate `SPONSOR_SECRET` and `DISTRIBUTION_SECRET` through infrastructure secrets.
