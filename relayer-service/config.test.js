@@ -32,6 +32,11 @@ describe('loadConfig', () => {
     );
   });
 
+  it('always uses zero as the sponsored account starting balance', () => {
+    expect(loadConfig(validEnv).startingBalance).toBe('0');
+    expect(loadConfig({ ...validEnv, STARTING_BALANCE: '1.5' }).startingBalance).toBe('0');
+  });
+
   it.each([
     ['unknown Stellar network', { STELLAR_NETWORK: 'mainnet' }, 'STELLAR_NETWORK must be one of'],
     ['invalid numeric limit', { MAX_PAYMENT_AMOUNT: 'abc' }, 'MAX_PAYMENT_AMOUNT must be'],
