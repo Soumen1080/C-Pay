@@ -1102,6 +1102,44 @@ describe('operator health endpoints', () => {
       code: 'HEALTH_CHECK_FAILED',
     });
   });
+
+  it('returns a generic response for PostgREST conflicts and logs details server-side', async () => {
+    const mod = await loadServerModule();
+    const error = new mod.SupabaseRequestError({
+      status: 409,
+      code: '23505',
+      message: 'duplicate key violates constraint "private_table_pkey"',
+      details: 'conflicting internal database record',
+    });
+    const response = {};
+    const logger = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const res = {
+      status(status) {
+        response.status = status;
+        return this;
+      },
+      json(body) {
+        response.body = body;
+        return this;
+      },
+    };
+
+    mod.testHooks.handleRelayerError(error, {}, res, () => {});
+
+    expect(response).toEqual({
+      status: 409,
+      body: {
+        error: 'Relayer service error',
+        code: 'INTERNAL_ERROR',
+      },
+    });
+    expect(JSON.stringify(response.body)).not.toMatch(/23505|private_table|conflicting internal/i);
+    expect(logger).toHaveBeenCalledWith('Relayer error:', expect.objectContaining({
+      message: expect.stringContaining('private_table_pkey'),
+      status: 409,
+    }));
+    logger.mockRestore();
+  });
 });
 
 // ── Payment transaction limits and velocity enforcement (#114) ───────────────

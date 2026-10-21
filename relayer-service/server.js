@@ -106,6 +106,7 @@ let localLowBalanceAlertUntil = 0;
 const PREPARED_ACCOUNT_TRANSACTION_TTL_MS = 5 * 60 * 1000;
 const MAX_PREPARED_ACCOUNT_TRANSACTIONS = 10000;
 const preparedAccountTransactions = Object.create(null);
+const inMemoryPaymentRecords = [];
 
 app.use(helmet());
 app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN || '*') }));
@@ -593,30 +594,40 @@ app.get('/tx/:hash', requireAuthenticatedUser, txLimiter, async (req, res) => {
   }
 });
 
-app.use((error, _req, res, _next) => {
+function handleRelayerError(error, _req, res, _next) {
   const horizonStatus = error.response?.status;
   const horizonExtras = error.response?.data?.extras;
   const resultCodes = horizonExtras?.result_codes;
   const status = error.statusCode || error.status || horizonStatus || 500;
   const stellarCode = resultCodes?.operations?.find(code => code !== 'op_success') || resultCodes?.transaction;
-  const code = error.code || (stellarCode ? `STELLAR_${stellarCode.toUpperCase()}` : undefined);
+  const isExposable = error.expose === true;
   const stellarMessage = getStellarErrorMessage(resultCodes);
-  const message = status >= 500 ? 'Relayer service error' : error.message;
+  const message = isExposable ? (stellarMessage || error.message) : 'Relayer service error';
+  const code = isExposable
+    ? (error.code || (stellarCode ? `STELLAR_${stellarCode.toUpperCase()}` : 'REQUEST_FAILED'))
+    : 'INTERNAL_ERROR';
 
-  if (status >= 500) {
+  if (!isExposable) {
     console.error('Relayer error:', {
-      classification: code || 'INTERNAL_ERROR',
+      message: error.message,
+      code: error.code,
       status,
+      stack: error.stack,
     });
   }
 
-  res.status(status).json({
-    error: stellarMessage || message,
+  const response = {
+    error: isExposable ? (stellarMessage || message) : message,
     code,
-    resultCodes,
     retryable: error.retryable || undefined,
-  });
-});
+  };
+  if (isExposable && resultCodes) {
+    response.resultCodes = resultCodes;
+  }
+  res.status(status).json(response);
+}
+
+app.use(handleRelayerError);
 
 let relayerHttpServer = null;
 
@@ -695,6 +706,7 @@ module.exports = {
       shouldSendLowBalanceAlert,
       resetLowBalanceAlert,
       checkLowBalanceAlerts,
+      handleRelayerError,
       preparedAccountTransactions,
       prunePreparedAccountTransactions,
       activeAddMoneyUserLocks,
@@ -960,7 +972,11 @@ async function bindWalletToUser(authUserId, walletAddress) {
     const owner = await resolveWalletOwner(walletAddress);
     if (owner.ok && owner.owner === authUserId) return;
     if (owner.ok && owner.owner) {
-      throw Object.assign(new Error('Wallet is already bound to another user'), { statusCode: 403, code: 'WALLET_OWNERSHIP_DENIED' });
+      throw Object.assign(new Error('Wallet is already bound to another user'), {
+        statusCode: 403,
+        code: 'WALLET_OWNERSHIP_DENIED',
+        expose: true,
+      });
     }
     throw error;
   }
@@ -1269,6 +1285,7 @@ function assertAccountId(value, label) {
   if (!StellarSdk.StrKey.isValidEd25519PublicKey(value || '')) {
     const error = new Error(`Invalid Stellar ${label}`);
     error.statusCode = 400;
+    error.expose = true;
     throw error;
   }
   return value;
@@ -1278,6 +1295,7 @@ function assertTransactionEnvelopeXdr(value) {
   if (typeof value !== 'string') {
     const error = new Error('Invalid transaction XDR');
     error.statusCode = 400;
+    error.expose = true;
     throw error;
   }
 
@@ -1285,6 +1303,7 @@ function assertTransactionEnvelopeXdr(value) {
   if (trimmed.length < 20 || trimmed.length > 20000) {
     const error = new Error('Invalid transaction XDR');
     error.statusCode = 400;
+    error.expose = true;
     throw error;
   }
 
@@ -1310,6 +1329,7 @@ function assertTransactionEnvelopeXdr(value) {
 
   const error = new Error('Invalid transaction XDR');
   error.statusCode = 400;
+  error.expose = true;
   throw error;
 }
 
@@ -1336,6 +1356,7 @@ function normalizeAmount(value, maxAmount) {
   if (!/^\d+(\.\d{1,7})?$/.test(amount)) {
     const error = new Error('Amount must be a positive number with up to 7 decimal places');
     error.statusCode = 400;
+    error.expose = true;
     throw error;
   }
 
@@ -1343,6 +1364,7 @@ function normalizeAmount(value, maxAmount) {
   if (!Number.isFinite(numeric) || numeric <= 0 || numeric > maxAmount) {
     const error = new Error(`Amount must be greater than 0 and no more than ${maxAmount}`);
     error.statusCode = 400;
+    error.expose = true;
     if (numeric > maxAmount) {
       error.code = 'PAYMENT_AMOUNT_EXCEEDED';
     }
@@ -1671,6 +1693,7 @@ function createAddMoneyPersistenceError(cause, operation) {
   }
   const error = new Error(`Add Money ${operation} is temporarily unavailable`);
   error.statusCode = 503;
+  error.expose = true;
   error.code = 'ADD_MONEY_PERSISTENCE_UNAVAILABLE';
   error.retryable = true;
   error.cause = cause;
@@ -1714,7 +1737,7 @@ async function acquireIdempotencyLock(key, ttlMs) {
 }
 
 async function acquireClientIdempotencyLock(authUserId, key, requestBody, ttlMs) {
-  if (!authUserId) throw Object.assign(new Error('Authenticated user is required for idempotency'), { statusCode: 401 });
+  if (!authUserId) throw Object.assign(new Error('Authenticated user is required for idempotency'), { statusCode: 401, expose: true });
   const requestHash = crypto.createHash('sha256').update(requestBody).digest('hex');
   if (!isSupabasePersistenceEnabled()) return { acquired: true, requestHash };
   const record = { auth_user_id: authUserId, key, request_hash: requestHash, response: null, expires_at: new Date(Date.now() + ttlMs).toISOString() };
@@ -1758,8 +1781,6 @@ async function setIdempotencyResponse(key, response, ttlMs) {
     console.warn('Idempotency update failed:', error.message);
   }
 }
-
-const inMemoryPaymentRecords = [];
 
 async function getPaymentRecords(accountId, authUserId, sinceIso) {
   if (!isSupabasePersistenceEnabled()) {
@@ -1834,6 +1855,7 @@ async function checkPaymentLimits(walletAddress, authUserId, amountStr) {
   if (amountNum > config.maxPaymentAmount) {
     const error = new Error(`Payment amount exceeds the maximum per-transaction limit of ${config.maxPaymentAmount} ${config.assetCode}`);
     error.statusCode = 400;
+    error.expose = true;
     error.code = 'PAYMENT_AMOUNT_EXCEEDED';
     throw error;
   }
@@ -1847,6 +1869,7 @@ async function checkPaymentLimits(walletAddress, authUserId, amountStr) {
   } catch (err) {
     const error = new Error('Payment limits service is temporarily unavailable');
     error.statusCode = 503;
+    error.expose = true;
     error.code = 'PAYMENT_LIMITS_UNAVAILABLE';
     error.retryable = true;
     throw error;
@@ -1859,6 +1882,7 @@ async function checkPaymentLimits(walletAddress, authUserId, amountStr) {
     const retryAfterSeconds = Math.max(1, Math.ceil((oldestRecent + 60 * 1000 - now) / 1000));
     const error = new Error(`Payment velocity limit reached (${config.maxPaymentVelocityPerMinute} per minute). Please wait ${retryAfterSeconds} seconds.`);
     error.statusCode = 429;
+    error.expose = true;
     error.code = 'PAYMENT_VELOCITY_EXCEEDED';
     error.retryAfterSeconds = retryAfterSeconds;
     throw error;
@@ -1870,6 +1894,7 @@ async function checkPaymentLimits(walletAddress, authUserId, amountStr) {
     const retryAfterSeconds = Math.max(1, Math.ceil((oldestInDay + 24 * 60 * 60 * 1000 - now) / 1000));
     const error = new Error(`Daily payment transaction limit reached (${config.maxPaymentDailyCount} transactions per day). Please try again later.`);
     error.statusCode = 429;
+    error.expose = true;
     error.code = 'PAYMENT_DAILY_COUNT_EXCEEDED';
     error.retryAfterSeconds = retryAfterSeconds;
     throw error;
@@ -1882,6 +1907,7 @@ async function checkPaymentLimits(walletAddress, authUserId, amountStr) {
     const retryAfterSeconds = Math.max(1, Math.ceil((oldestInDay + 24 * 60 * 60 * 1000 - now) / 1000));
     const error = new Error(`Daily payment amount limit reached. Maximum ${config.maxPaymentDailyAmount} ${config.assetCode} per day.`);
     error.statusCode = 429;
+    error.expose = true;
     error.code = 'PAYMENT_DAILY_CAP_EXCEEDED';
     error.retryAfterSeconds = retryAfterSeconds;
     error.details = {
@@ -2000,12 +2026,14 @@ function validatePaymentTransaction(transaction) {
   if (!transaction.source) {
     const error = new Error('Transaction source is required');
     error.statusCode = 400;
+    error.expose = true;
     throw error;
   }
 
   if (transaction.operations.length !== 1) {
     const error = new Error('Payment transaction must contain exactly one operation');
     error.statusCode = 400;
+    error.expose = true;
     throw error;
   }
 
@@ -2013,6 +2041,7 @@ function validatePaymentTransaction(transaction) {
   if (operation.type !== 'payment') {
     const error = new Error('Only payment operations are accepted');
     error.statusCode = 400;
+    error.expose = true;
     throw error;
   }
 
@@ -2020,6 +2049,7 @@ function validatePaymentTransaction(transaction) {
   if (operationSource !== transaction.source) {
     const error = new Error('Payment operation source must match transaction source');
     error.statusCode = 400;
+    error.expose = true;
     throw error;
   }
 
@@ -2032,6 +2062,7 @@ function validatePaymentTransaction(transaction) {
   ) {
     const error = new Error('Payment asset is not supported');
     error.statusCode = 400;
+    error.expose = true;
     throw error;
   }
 
