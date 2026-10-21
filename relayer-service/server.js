@@ -658,46 +658,6 @@ startupPromise.catch(error => {
   }
 });
 
-module.exports = {
-  app,
-  get server() {
-    return relayerHttpServer;
-  },
-  startupPromise,
-  ingestWorker,
-  keyManager,
-  SupabaseRequestError,
-  ...(process.env.NODE_ENV === 'test' ? {
-    testHooks: Object.freeze({
-      keyManager,
-      stellarServer: server,
-      acquireAddMoneyUserLock,
-      releaseAddMoneyUserLock,
-      acquireIdempotencyLock,
-      getAddMoneyRetryAfterSeconds,
-      checkAddMoneyDailyCap,
-      reserveAddMoneyClaim,
-      settleAddMoneyClaim,
-      supabaseRestRequest,
-      SupabaseRequestError,
-      isPostgresUniqueViolation,
-      checkPaymentLimits,
-      getPaymentLimitsStatus,
-      recordPaymentRecord,
-      inMemoryPaymentRecords,
-      shouldSendLowBalanceAlert,
-      resetLowBalanceAlert,
-      checkLowBalanceAlerts,
-      handleRelayerError,
-      preparedAccountTransactions,
-      prunePreparedAccountTransactions,
-      activeAddMoneyUserLocks,
-      pruneActiveAddMoneyUserLocks,
-      requireAccountPreparationOwnership,
-    }),
-  } : {}),
-};
-
 function parseConfiguredQuoteRates() {
   const raw = process.env.QUOTE_FX_RATES_JSON || '{}';
   try {
@@ -2051,3 +2011,43 @@ async function resetLowBalanceAlert() {
     } catch {}
   }
 }
+
+module.exports = {
+  app,
+  get server() {
+    return relayerHttpServer;
+  },
+  startupPromise,
+  ingestWorker,
+  keyManager,
+  SupabaseRequestError,
+  ...(process.env.NODE_ENV === 'test' ? {
+    testHooks: Object.freeze({
+      keyManager,
+      stellarServer: server,
+      acquireAddMoneyUserLock,
+      releaseAddMoneyUserLock,
+      acquireIdempotencyLock,
+      getAddMoneyRetryAfterSeconds,
+      checkAddMoneyDailyCap,
+      reserveAddMoneyClaim,
+      settleAddMoneyClaim,
+      supabaseRestRequest,
+      SupabaseRequestError,
+      isPostgresUniqueViolation,
+      checkPaymentLimits,
+      getPaymentLimitsStatus,
+      recordPaymentRecord,
+      inMemoryPaymentRecords,
+      shouldSendLowBalanceAlert,
+      resetLowBalanceAlert,
+      checkLowBalanceAlerts,
+      handleRelayerError,
+      preparedAccountTransactions,
+      prunePreparedAccountTransactions,
+      activeAddMoneyUserLocks,
+      pruneActiveAddMoneyUserLocks,
+      requireAccountPreparationOwnership,
+    }),
+  } : {}),
+};
