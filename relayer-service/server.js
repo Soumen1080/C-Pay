@@ -208,6 +208,7 @@ app.get('/account/:accountId/balance', requireAuthenticatedUser, requirePathWall
 
 app.post(
   '/accounts/prepare',
+  rejectUnauthenticatedPublicSponsorship,
   requireAuthenticatedUser,
   requireAccountPreparationOwnership('accountId'),
   async (req, res) => {
@@ -1090,6 +1091,20 @@ function requireAccountPreparationOwnership(walletField = 'accountId') {
 
     return next();
   };
+}
+
+/**
+ * Public-network reserve sponsorship must always be attributable to an
+ * authenticated user. Development may leave auth off for testnet only.
+ */
+function rejectUnauthenticatedPublicSponsorship(req, res, next) {
+  if (config.networkName === 'public' && !config.authRequired) {
+    return res.status(403).json({
+      error: 'Account sponsorship requires authentication on the public network',
+      code: 'PUBLIC_NETWORK_AUTH_REQUIRED',
+    });
+  }
+  return next();
 }
 
 async function verifySupabaseJwt(authorizationHeader) {
@@ -2106,6 +2121,7 @@ module.exports = {
       activeAddMoneyUserLocks,
       pruneActiveAddMoneyUserLocks,
       requireAccountPreparationOwnership,
+      rejectUnauthenticatedPublicSponsorship,
     }),
   } : {}),
 };

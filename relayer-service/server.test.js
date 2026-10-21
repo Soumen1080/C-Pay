@@ -258,6 +258,7 @@ function buildFetchMock({
 
 let app;
 const activeModuleServers = new Set();
+let activeModuleServer = null;
 
 async function closeActiveModuleServers() {
   const servers = Array.from(activeModuleServers);
@@ -555,6 +556,23 @@ async function loadAccountSubmissionServer(userWallets) {
 
 describe('/accounts/submit prepared setup authorization', () => {
   const passphrase = 'Test SDF Network ; September 2015';
+
+  it('prepares newly sponsored accounts with zero spendable XLM', async () => {
+    const newWallet = StellarSdk.Keypair.random();
+    const mod = await loadAccountSubmissionServer({ [USER_A]: [WALLET_A] });
+
+    const prepare = await postJson(
+      mod.app,
+      '/accounts/prepare',
+      { accountId: newWallet.publicKey() },
+      { Authorization: makeBearerToken(USER_A) }
+    );
+
+    expect(prepare.status).toBe(200);
+    const transaction = StellarSdk.TransactionBuilder.fromXDR(prepare.body.xdr, passphrase);
+    const createAccount = transaction.operations.find(operation => operation.type === 'createAccount');
+    expect(createAccount).toEqual(expect.objectContaining({ startingBalance: '0' }));
+  });
 
   it('allows an authenticated new wallet to prepare, sign, and submit its setup transaction', async () => {
     const newWallet = StellarSdk.Keypair.random();
@@ -865,6 +883,27 @@ describe('ownership checks skipped when auth is disabled', () => {
 
     expect(status).not.toBe(403);
     expect(body.code).not.toBe('WALLET_OWNERSHIP_DENIED');
+  });
+
+  it('rejects /accounts/prepare when public-network authentication is disabled', async () => {
+    expressApp = await loadServer({
+      NODE_ENV: 'development',
+      STELLAR_NETWORK: 'public',
+      USDC_ASSET_ISSUER: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+      RELAYER_AUTH_REQUIRED: 'false',
+      SUPABASE_URL: '',
+      SUPABASE_SERVICE_ROLE_KEY: '',
+      __fetchMock: buildFetchMock(),
+    });
+
+    const { status, body } = await postJson(
+      expressApp,
+      '/accounts/prepare',
+      { accountId: WALLET_B }
+    );
+
+    expect(status).toBe(403);
+    expect(body.code).toBe('PUBLIC_NETWORK_AUTH_REQUIRED');
   });
 });
 
