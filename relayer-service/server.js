@@ -7,29 +7,11 @@ const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 const StellarSdk = require('@stellar/stellar-sdk');
 const { createQuoteEngine } = require('./quote-engine');
+const { loadConfig, getPublicConfig } = require('./config');
 
 const app = express();
-const PORT = Number(process.env.PORT || 3000);
-
-const NETWORKS = {
-  testnet: {
-    horizonUrl: 'https://horizon-testnet.stellar.org',
-    passphrase: StellarSdk.Networks.TESTNET,
-    friendbotUrl: 'https://friendbot.stellar.org',
-  },
-  public: {
-    horizonUrl: 'https://horizon.stellar.org',
-    passphrase: StellarSdk.Networks.PUBLIC,
-    friendbotUrl: null,
-  },
-};
-
-const USDC_ISSUERS = {
-  testnet: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
-  public: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
-};
-
 const config = loadConfig();
+const PORT = config.port;
 const quoteEngine = createQuoteEngine({
   rateProvider: {
     async getRate({ from, to }) {
@@ -93,7 +75,7 @@ const ingestWorker = new IngestWorker({
  * - Fires at most once per window across all instances.
  * - Automatically reset when balances recover above threshold.
  */
-const LOW_BALANCE_ALERT_WINDOW_MS = Number(process.env.LOW_BALANCE_ALERT_WINDOW_MS || 60 * 60 * 1000);
+const LOW_BALANCE_ALERT_WINDOW_MS = config.lowBalanceAlertWindowMs;
 let localLowBalanceAlertUntil = 0;
 
 /**
@@ -109,12 +91,12 @@ const preparedAccountTransactions = Object.create(null);
 const inMemoryPaymentRecords = [];
 
 app.use(helmet());
-app.use(cors({ origin: parseCorsOrigin(process.env.CORS_ORIGIN || '*') }));
+app.use(cors({ origin: config.corsOrigin }));
 app.use(express.json({ limit: '64kb' }));
 
 const limiter = rateLimit({
-  windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 60000),
-  max: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 100),
+  windowMs: config.rateLimitWindowMs,
+  max: config.rateLimitMaxRequests,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later' },
@@ -564,8 +546,8 @@ app.post('/add-money', requireAuthenticatedUser, requireWalletOwnership('account
 });
 
 const txLimiter = rateLimit({
-  windowMs: Number(process.env.TX_RATE_LIMIT_WINDOW_MS || 60000),
-  max: Number(process.env.TX_RATE_LIMIT_MAX_REQUESTS || 30),
+  windowMs: config.txRateLimitWindowMs,
+  max: config.txRateLimitMaxRequests,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many transaction status requests, please try again later' },
@@ -644,7 +626,7 @@ async function startRelayer() {
   relayerHttpServer.ref();
 
   console.log(`C-Pay Stellar relayer listening on port ${PORT}`);
-  console.log(`Network: ${config.networkName}`);
+  console.log('Effective relayer configuration:', getPublicConfig(config));
 
   // Start ledger ingest worker on startup (non-blocking)
   if (config.ledgerIngestEnabled && ingestWorker.isConfigured) {
@@ -716,76 +698,6 @@ module.exports = {
   } : {}),
 };
 
-function loadConfig() {
-  const networkName = (process.env.STELLAR_NETWORK || 'testnet').toLowerCase();
-  const network = NETWORKS[networkName] || NETWORKS.testnet;
-  const horizonUrl = process.env.STELLAR_HORIZON_URL || network.horizonUrl;
-  const passphrase = process.env.STELLAR_NETWORK_PASSPHRASE || network.passphrase;
-  const sponsorSecret = requireEnv('SPONSOR_SECRET');
-  const distributionSecret = requireEnv('DISTRIBUTION_SECRET');
-  const assetCode = 'USDC';
-  const expectedUsdcIssuer = networkName === 'public' ? USDC_ISSUERS.public : USDC_ISSUERS.testnet;
-  const assetIssuer = process.env.USDC_ASSET_ISSUER || expectedUsdcIssuer;
-  const authRequired = readBooleanEnv('RELAYER_AUTH_REQUIRED', networkName === 'public');
-  // The legacy faucet is testnet-only and opt-in. It can never run on public network.
-  const addMoneyEnabled = networkName === 'testnet' && readBooleanEnv('ENABLE_TESTNET_FAUCET', false);
-  const supabaseJwtSecret = process.env.SUPABASE_JWT_SECRET || '';
-  const supabaseUrl = process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL || '';
-  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-
-  assertTrustedHorizonUrl(horizonUrl);
-
-  if (assetIssuer !== expectedUsdcIssuer) {
-    throw new Error(`USDC_ASSET_ISSUER must be Circle's canonical ${networkName} issuer`);
-  }
-
-  if (authRequired && (!supabaseUrl || !supabaseServiceRoleKey)) {
-    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required when relayer authentication is enabled');
-  }
-
-  return {
-    networkName,
-    horizonUrl,
-    passphrase,
-    sponsorSecret,
-    distributionSecret,
-    assetCode,
-    assetIssuer,
-    baseFee: process.env.STELLAR_BASE_FEE || StellarSdk.BASE_FEE,
-    feeBumpMultiplier: Number(process.env.FEE_BUMP_MULTIPLIER || 10),
-    transactionTimeoutSeconds: Number(process.env.TRANSACTION_TIMEOUT_SECONDS || 60),
-    startingBalance: process.env.STARTING_BALANCE || '1.5',
-    trustlineLimit: process.env.TRUSTLINE_LIMIT || '1000000000',
-    maxSponsoredAccountsPerUser: Number(process.env.MAX_SPONSORED_ACCOUNTS_PER_USER || 5),
-    addMoneyAmount: process.env.ADD_MONEY_AMOUNT || '100',
-    maxAddMoneyAmount: Number(process.env.MAX_ADD_MONEY_AMOUNT || 1000),
-    maxAddMoneyDailyCap: Number(process.env.MAX_ADD_MONEY_DAILY_CAP || process.env.ADD_MONEY_DAILY_CAP || 1000),
-    maxPaymentAmount: Number(process.env.MAX_PAYMENT_AMOUNT || 1000),
-    maxPaymentDailyAmount: Number(process.env.MAX_PAYMENT_DAILY_AMOUNT || 5000),
-    maxPaymentDailyCount: Number(process.env.MAX_PAYMENT_DAILY_COUNT || 20),
-    maxPaymentVelocityPerMinute: Number(process.env.MAX_PAYMENT_VELOCITY_PER_MINUTE || 10),
-    addMoneyCooldownMs: Number(process.env.ADD_MONEY_COOLDOWN_MS || 24 * 60 * 60 * 1000),
-    idempotencyTtlMs: Number(process.env.IDEMPOTENCY_TTL_MS || 10 * 60 * 1000),
-    lowXlmThreshold: Number(process.env.LOW_XLM_THRESHOLD || 5),
-    lowAssetThreshold: Number(process.env.LOW_USDC_THRESHOLD || 100),
-    lowBalanceCheckIntervalMs: Number(process.env.LOW_BALANCE_CHECK_INTERVAL_MS || 5 * 60 * 1000),
-    authRequired,
-    adminToken: process.env.RELAYER_ADMIN_TOKEN || '',
-    supabaseJwtSecret,
-    supabaseUrl,
-    supabaseServiceRoleKey,
-    addMoneyEnabled,
-    // Ledger Ingest worker
-    ledgerIngestEnabled: readBooleanEnv('LEDGER_INGEST_ENABLED', true),
-    ingestPollIntervalMs: Number(process.env.INGEST_POLL_INTERVAL_MS || 5000),
-    ingestPendingTimeoutMs: Number(process.env.INGEST_PENDING_TIMEOUT_MS || 300000),
-    ingestStartCursor: process.env.INGEST_START_CURSOR || null,
-    quoteFeeBps: Number(process.env.QUOTE_FEE_BPS || 175),
-    quoteSpreadBps: Number(process.env.QUOTE_SPREAD_BPS || 0),
-    quoteTtlSeconds: Number(process.env.QUOTE_TTL_SECONDS || 60),
-  };
-}
-
 function parseConfiguredQuoteRates() {
   const raw = process.env.QUOTE_FX_RATES_JSON || '{}';
   try {
@@ -797,36 +709,6 @@ function parseConfiguredQuoteRates() {
     configError.code = 'FX_RATE_UNAVAILABLE';
     throw configError;
   }
-}
-
-function readBooleanEnv(name, defaultValue) {
-  const value = process.env[name];
-  if (value === undefined || value === '') {
-    return defaultValue;
-  }
-
-  return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
-}
-
-function requireEnv(name) {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`${name} is required`);
-  }
-  return value;
-}
-
-function parseCorsOrigin(value) {
-  if (value === '*') {
-    return '*';
-  }
-
-  const origins = value
-    .split(',')
-    .map(origin => origin.trim())
-    .filter(Boolean);
-
-  return origins.length <= 1 ? origins[0] || '*' : origins;
 }
 
 async function requireAuthenticatedUser(req, res, next) {
@@ -1265,20 +1147,6 @@ async function verifySupabaseTokenWithAuthApi(token) {
 function base64UrlDecode(value) {
   const padded = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
   return Buffer.from(padded, 'base64');
-}
-
-function assertTrustedHorizonUrl(horizonUrl) {
-  const parsed = new URL(horizonUrl);
-  const allowCustom = process.env.ALLOW_CUSTOM_HORIZON === 'true';
-  const allowedHosts = new Set(['horizon-testnet.stellar.org', 'horizon.stellar.org']);
-
-  if (parsed.protocol !== 'https:' && process.env.ALLOW_HTTP_HORIZON !== 'true') {
-    throw new Error('Horizon URL must use HTTPS unless ALLOW_HTTP_HORIZON=true');
-  }
-
-  if (!allowCustom && !allowedHosts.has(parsed.hostname)) {
-    throw new Error('Custom Horizon hosts require ALLOW_CUSTOM_HORIZON=true');
-  }
 }
 
 function assertAccountId(value, label) {
