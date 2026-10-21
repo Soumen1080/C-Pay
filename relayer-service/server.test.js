@@ -305,6 +305,7 @@ async function loadServerModule(env = {}, { closeExisting = true } = {}) {
     SUPABASE_SERVICE_ROLE_KEY: 'test-service-role-key',
     LEDGER_INGEST_ENABLED: 'false',
     RELAYER_AUTH_REQUIRED: 'true',
+    RELAYER_ADMIN_TOKEN: 'test-admin-token',
     ENABLE_TESTNET_FAUCET: 'true',
     LEDGER_INGEST_ENABLED: 'false',
     PORT: '0',
@@ -426,8 +427,8 @@ afterEach(async () => {
     'STELLAR_HORIZON_URL', 'ALLOW_HTTP_SOROBAN_RPC', 'ALLOW_CUSTOM_SOROBAN_RPC',
     'SOROBAN_RPC_URL', 'STELLAR_NETWORK_PASSPHRASE', 'SPONSOR_SECRET',
     'DISTRIBUTION_SECRET', 'CPINR_ASSET_ISSUER', 'SUPABASE_URL',
-    'SUPABASE_SERVICE_ROLE_KEY', 'RELAYER_AUTH_REQUIRED', 'ENABLE_ADD_MONEY',
-    'PORT', 'LEDGER_INGEST_ENABLED',
+    'SUPABASE_SERVICE_ROLE_KEY', 'RELAYER_AUTH_REQUIRED', 'RELAYER_ADMIN_TOKEN', 'ENABLE_ADD_MONEY',
+    'PORT', 'LEDGER_INGEST_ENABLED', 'ALERT_WEBHOOK_URL', 'LOW_BALANCE_CHECK_INTERVAL_MS',
   ];
   ADDED_KEYS.forEach(k => delete process.env[k]);
   jest.resetModules();
@@ -974,14 +975,14 @@ describe('unauthenticated requests are rejected before ownership check', () => {
     expect(body.code).toBe('AUTH_REQUIRED');
   });
 
-  it('returns 401 when no token is provided to /ingest/health', async () => {
+  it('returns 403 when no operator token is provided to /ingest/health', async () => {
     const { status, body } = await getJson(
       expressApp,
       '/ingest/health'
     );
 
-    expect(status).toBe(401);
-    expect(body.code).toBe('AUTH_REQUIRED');
+    expect(status).toBe(403);
+    expect(body.code).toBe('ADMIN_AUTH_REQUIRED');
   });
 
   it('returns 401 when no token is provided to /tx/:hash', async () => {
@@ -1006,6 +1007,100 @@ describe('unauthenticated requests are rejected before ownership check', () => {
       health: '/health',
     });
     expect(body.endpoints).toBeUndefined();
+  });
+});
+
+describe('operator health endpoints', () => {
+  it.each(['/health/detailed', '/ingest/health'])(
+    'rejects ordinary users on %s when relayer authentication is enabled',
+    async path => {
+      const expressApp = await loadServer();
+      const { status, body } = await getJson(expressApp, path, {
+        Authorization: makeBearerToken(USER_A),
+      });
+
+      expect(status).toBe(403);
+      expect(body.code).toBe('ADMIN_AUTH_REQUIRED');
+    }
+  );
+
+  it.each(['/health/detailed', '/ingest/health'])(
+    'rejects requests on %s when user authentication is disabled',
+    async path => {
+      const expressApp = await loadServer({ RELAYER_AUTH_REQUIRED: 'false' });
+      const { status, body } = await getJson(expressApp, path);
+
+      expect(status).toBe(403);
+      expect(body.code).toBe('ADMIN_AUTH_REQUIRED');
+    }
+  );
+
+  it('allows operator-token monitoring and keeps the public probe minimal', async () => {
+    const expressApp = await loadServer();
+    const operatorHeaders = { 'X-Admin-Token': 'test-admin-token' };
+    const ingest = await getJson(expressApp, '/ingest/health', operatorHeaders);
+    const publicHealth = await getJson(expressApp, '/health');
+
+    expect(ingest.status).toBe(200);
+    expect(ingest.body).toHaveProperty('status');
+    expect(publicHealth.status).toBe(200);
+    expect(publicHealth.body).toEqual({ status: 'ok' });
+  });
+
+  it('serves detailed health to the operator without triggering alerts', async () => {
+    const fetchCalls = [];
+    const mod = await loadServerModule({
+      RELAYER_AUTH_REQUIRED: 'false',
+      RELAYER_ADMIN_TOKEN: 'operator-secret',
+      ALERT_WEBHOOK_URL: 'https://alerts.example.test',
+      SUPABASE_URL: '',
+      SUPABASE_SERVICE_ROLE_KEY: '',
+      __fetchMock: async (url, options) => {
+        fetchCalls.push({ url: String(url), options });
+        return makeResponse(true, 200, {});
+      },
+    });
+    jest.spyOn(mod.testHooks.stellarServer, 'loadAccount').mockResolvedValue({
+      balances: [
+        { asset_type: 'native', balance: '10' },
+        {
+          asset_code: 'USDC',
+          asset_issuer: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
+          balance: '200',
+        },
+      ],
+    });
+
+    const { status, body } = await getJson(mod.app, '/health/detailed', {
+      'X-Admin-Token': 'operator-secret',
+    });
+
+    expect(status).toBe(200);
+    expect(body).toMatchObject({
+      status: 'healthy',
+      sponsorXlmBalance: '10',
+      distributionUsdcBalance: '200',
+      lowXlm: false,
+      lowAsset: false,
+    });
+    expect(fetchCalls).toHaveLength(0);
+  });
+
+  it('reports detailed health failures without exposing upstream errors', async () => {
+    const mod = await loadServerModule();
+    jest.spyOn(mod.testHooks.stellarServer, 'loadAccount').mockRejectedValue(
+      new Error('sensitive upstream details')
+    );
+
+    const { status, body } = await getJson(mod.app, '/health/detailed', {
+      'X-Admin-Token': 'test-admin-token',
+    });
+
+    expect(status).toBe(500);
+    expect(body).toEqual({
+      error: 'Detailed health check failed',
+      code: 'HEALTH_CHECK_FAILED',
+    });
   });
 });
 
@@ -1435,4 +1530,3 @@ describe('Multi-instance coordination and bounded memory state', () => {
     });
   });
 });
-
