@@ -53,7 +53,7 @@ retryable `503` and do not submit funds.
 - `POST /accounts/submit`: Authenticated user-signed transaction submission
 - `POST /payments/submit`: Authenticated sponsored payment submission
 - `POST /add-money`: Authenticated testnet faucet distribution
-- `GET /tx/:hash`: Authenticated, rate-limited Horizon transaction status lookup
+- `GET /tx/:hash`: Authenticated, rate-limited Horizon transaction status lookup. Returns `success`, `failed` (with `result_codes` when available), or `not_found`; a missing hash is never reported as pending.
 
 ## Multi-Instance Architecture & Coordination
 

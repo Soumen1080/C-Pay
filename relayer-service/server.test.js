@@ -1010,6 +1010,60 @@ describe('unauthenticated requests are rejected before ownership check', () => {
   });
 });
 
+describe('GET /tx/:hash status mapping', () => {
+  const TX_HASH = 'a'.repeat(64);
+
+  it('returns failed and Horizon result codes for a mocked failed transaction', async () => {
+    const mod = await loadServerModule({
+      __fetchMock: buildFetchMock({ userWallets: { [USER_A]: [WALLET_A] } }),
+    });
+    const failedHorizonTx = {
+      successful: false,
+      ledger: 123,
+      created_at: '2026-01-02T03:04:05Z',
+      fee_charged: '100',
+      result_codes: {
+        transaction: 'tx_failed',
+        operations: ['op_underfunded'],
+      },
+    };
+    const call = jest.fn().mockResolvedValue(failedHorizonTx);
+    mod.testHooks.stellarServer.transactions = jest.fn(() => ({
+      transaction: jest.fn(() => ({ call })),
+    }));
+
+    const { status, body } = await getJson(mod.app, `/tx/${TX_HASH}`, {
+      Authorization: makeBearerToken(USER_A),
+    });
+
+    expect(status).toBe(200);
+    expect(body).toEqual(expect.objectContaining({
+      hash: TX_HASH,
+      status: 'failed',
+      result_codes: failedHorizonTx.result_codes,
+    }));
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns not_found rather than pending when Horizon does not know the hash', async () => {
+    const mod = await loadServerModule({
+      __fetchMock: buildFetchMock({ userWallets: { [USER_A]: [WALLET_A] } }),
+    });
+    mod.testHooks.stellarServer.transactions = jest.fn(() => ({
+      transaction: jest.fn(() => ({
+        call: jest.fn().mockRejectedValue({ response: { status: 404 } }),
+      })),
+    }));
+
+    const { status, body } = await getJson(mod.app, `/tx/${TX_HASH}`, {
+      Authorization: makeBearerToken(USER_A),
+    });
+
+    expect(status).toBe(200);
+    expect(body).toEqual({ hash: TX_HASH, status: 'not_found' });
+  });
+});
+
 describe('operator health endpoints', () => {
   it.each(['/health/detailed', '/ingest/health'])(
     'rejects ordinary users on %s when relayer authentication is enabled',
