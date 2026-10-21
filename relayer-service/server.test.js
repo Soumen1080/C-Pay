@@ -21,7 +21,7 @@
  * verifySupabaseTokenWithAuthApi calls response.json().
  */
 function makeResponse(ok, status, data) {
-  const body = JSON.stringify(data);
+  const body = data === null || data === undefined ? '' : JSON.stringify(data);
   return {
     ok,
     status,
@@ -571,7 +571,8 @@ describe('/accounts/submit prepared setup authorization', () => {
     expect(prepare.status).toBe(200);
     const transaction = StellarSdk.TransactionBuilder.fromXDR(prepare.body.xdr, passphrase);
     const createAccount = transaction.operations.find(operation => operation.type === 'createAccount');
-    expect(createAccount).toEqual(expect.objectContaining({ startingBalance: '0' }));
+    // The SDK normalizes the zero operation amount to seven decimal places.
+    expect(createAccount).toEqual(expect.objectContaining({ startingBalance: '0.0000000' }));
   });
 
   it('allows an authenticated new wallet to prepare, sign, and submit its setup transaction', async () => {
@@ -854,6 +855,7 @@ describe('ownership checks skipped when auth is disabled', () => {
 
   beforeEach(async () => {
     expressApp = await loadServer({
+      NODE_ENV: 'development',
       RELAYER_AUTH_REQUIRED: 'false',
       SUPABASE_URL: '',
       SUPABASE_SERVICE_ROLE_KEY: '',
