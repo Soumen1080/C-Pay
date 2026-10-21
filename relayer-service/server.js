@@ -561,20 +561,68 @@ app.get('/tx/:hash', requireAuthenticatedUser, txLimiter, async (req, res) => {
 
   try {
     const tx = await server.transactions().transaction(hash).call();
-    return res.json({
+    const failed = tx.successful === false;
+    const response = {
       hash,
-      status: 'success',
+      status: failed ? 'failed' : 'success',
       ledger: tx.ledger,
       createdAt: tx.created_at,
       feeCharged: tx.fee_charged,
-    });
+    };
+
+    // Horizon includes failed transactions in this lookup too. Prefer its
+    // structured codes when present; result_xdr is decoded as a fallback for
+    // the normal Horizon transaction representation.
+    if (failed) {
+      response.result_codes = getHorizonTransactionResultCodes(tx);
+    }
+
+    return res.json(response);
   } catch (error) {
     if (error?.response?.status === 404) {
-      return res.json({ hash, status: 'pending' });
+      // A missing hash has not been accepted by Horizon. It is distinct from
+      // a submitted transaction which is still awaiting a ledger outcome.
+      return res.json({ hash, status: 'not_found' });
     }
     throw error;
   }
 });
+
+function getHorizonTransactionResultCodes(tx) {
+  if (tx?.result_codes && typeof tx.result_codes === 'object') {
+    return tx.result_codes;
+  }
+  if (tx?.resultCodes && typeof tx.resultCodes === 'object') {
+    return tx.resultCodes;
+  }
+  if (!tx?.result_xdr) {
+    return null;
+  }
+
+  try {
+    const result = StellarSdk.xdr.TransactionResult.fromXDR(tx.result_xdr, 'base64');
+    const resultBody = result.result();
+    const transaction = formatStellarResultCode(resultBody.switch());
+    const operationResults = resultBody.results ? resultBody.results() : [];
+    const operations = operationResults.map(operationResult =>
+      formatStellarResultCode(operationResult.tr().switch())
+    );
+
+    return {
+      transaction,
+      ...(operations.length > 0 ? { operations } : {}),
+    };
+  } catch (_) {
+    // Result-code enrichment must never turn a known failed transaction into
+    // an endpoint failure when Horizon supplies an unfamiliar XDR variant.
+    return null;
+  }
+}
+
+function formatStellarResultCode(code) {
+  const value = typeof code?.name === 'string' ? code.name : String(code || '');
+  return value.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+}
 
 function handleRelayerError(error, _req, res, _next) {
   const horizonStatus = error.response?.status;
@@ -2043,6 +2091,7 @@ module.exports = {
       resetLowBalanceAlert,
       checkLowBalanceAlerts,
       handleRelayerError,
+      getHorizonTransactionResultCodes,
       preparedAccountTransactions,
       prunePreparedAccountTransactions,
       activeAddMoneyUserLocks,
