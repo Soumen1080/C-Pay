@@ -604,9 +604,7 @@ function getHorizonTransactionResultCodes(tx) {
     const resultBody = result.result();
     const transaction = formatStellarResultCode(resultBody.switch());
     const operationResults = resultBody.results ? resultBody.results() : [];
-    const operations = operationResults.map(operationResult =>
-      formatStellarResultCode(operationResult.tr().switch())
-    );
+    const operations = operationResults.map(getOperationResultCode);
 
     return {
       transaction,
@@ -622,6 +620,17 @@ function getHorizonTransactionResultCodes(tx) {
 function formatStellarResultCode(code) {
   const value = typeof code?.name === 'string' ? code.name : String(code || '');
   return value.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+}
+
+function getOperationResultCode(operationResult) {
+  const outerCode = operationResult.switch();
+  if (outerCode?.name !== 'opInner') {
+    return formatStellarResultCode(outerCode);
+  }
+
+  // An opInner result wraps an operation-specific result union. Its value is
+  // the relevant result-code union (for example paymentUnderfunded).
+  return formatStellarResultCode(operationResult.tr().value().switch());
 }
 
 function handleRelayerError(error, _req, res, _next) {
