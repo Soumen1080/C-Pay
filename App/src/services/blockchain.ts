@@ -68,7 +68,7 @@ const ACCOUNT_READY_TIMEOUT_MS = 15000;
 const ACCOUNT_READY_POLL_MS = 1500;
 const CONTRACT_INTENT_TIMEOUT_MS = 60000;
 
-export type TransactionStatus = 'pending' | 'success' | 'failed' | 'unknown';
+export type TransactionStatus = 'pending' | 'success' | 'failed' | 'not_found' | 'unknown';
 
 export type PaymentOptions = {
   note?: string;
@@ -316,7 +316,7 @@ export async function sendPayment(
 
 export async function getTransactionReceipt(txHash: string) {
   const status = await getTransactionStatus(txHash);
-  if (status === 'unknown' || status === 'pending') {
+  if (status === 'unknown' || status === 'pending' || status === 'not_found') {
     return null;
   }
 

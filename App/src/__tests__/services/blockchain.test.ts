@@ -1,4 +1,4 @@
-import { requestAddMoney, sendPayment, transferTokens } from '../../services/blockchain';
+import { getTransactionStatus, requestAddMoney, sendPayment, transferTokens } from '../../services/blockchain';
 import * as StellarSdk from '@stellar/stellar-base';
 
 // Mock global fetch for relayerRequest
@@ -110,5 +110,15 @@ describe('blockchain.ts idempotency key behavior (#33)', () => {
       expect(body.idempotencyKey).toBe(intentKey);
       expect(body.idempotencyKey).not.toMatch(/\b\d{13}\b/);
     });
+  });
+
+  test('preserves a not_found status so the monitor can apply its timeout policy', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ status: 'not_found' }),
+    });
+
+    await expect(getTransactionStatus('a'.repeat(64))).resolves.toBe('not_found');
   });
 });
